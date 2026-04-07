@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Missing Data</title>
+    <!-- Modern font from Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-bg: #f9fafb;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --border-color: #e5e7eb;
+            --success-text: #065f46;
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--primary-bg);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+
+        .container {
+            background-color: var(--card-bg);
+            width: 100%;
+            max-width: 1100px;
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+            text-align: center;
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            color: var(--text-main);
+        }
+
+        p {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            font-size: 0.95rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        th {
+            background-color: var(--primary-bg);
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            font-weight: 600;
+            color: var(--text-main);
+            text-align: left;
+            z-index: 10;
+        }
+
+        td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        tr:hover {
+            background-color: #f8fafc;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            padding: 0.5rem;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background-color: #fff;
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.85rem;
+        }
+
+        select:focus, input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn-submit {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            box-shadow: var(--shadow-md);
+            padding: 0.75rem 2rem;
+        }
+
+        .btn-submit:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .table-container {
+            max-height: 60vh;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        .table-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .table-container::-webkit-scrollbar-track {
+            background: var(--primary-bg);
+            border-radius: 4px;
+        }
+        .table-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Manual Data Mapping</h2>
+        <p>Map missing geographical data based on Context Addresses. Blank values will be automatically treated as Unmatched/Null.</p>
+        
+        <form method="POST" action="{% url 'apply_manual_mapping' unique_id %}">
+            {% csrf_token %}
+            
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 140px;">Account / Platform</th>
+                            <th>Address 1</th>
+                            <th>Address 2</th>
+                            <th style="width: 150px;">Province</th>
+                            <th style="width: 150px;">District</th>
+                            <th style="width: 180px;">Municipality</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in missing_records %}
+                        <tr>
+                            <td>
+                                <strong>{{ row.account_number }}</strong><br>
+                                <span style="font-size: 0.75rem; color: #0284c7; font-weight: 500;">{{ row.platform }}</span>
+                            </td>
+                            <td>{{ row.address_1 }}</td>
+                            <td>{{ row.address_2 }}</td>
+                            
+                            <!-- Province Column -->
+                            <td>
+                                {% if row.needs_province %}
+                                <select name="prov_{{ row.account_number }}">
+                                    <option value="Ignore">-- Leave Null --</option>
+                                    {% for p in provinces_list %}
+                                    <option value="{{ p }}">{{ p }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                {% endif %}
+                            </td>
+                            
+                            <!-- District Column -->
+                            <td>
+                                {% if row.needs_district %}
+                                <select name="dist_{{ row.account_number }}">
+                                    <option value="Ignore">-- Leave Null --</option>
+                                    {% for d in districts_list %}
+                                    <option value="{{ d }}">{{ d }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                {% endif %}
+                            </td>
+                            
+                            <!-- Municipality Column -->
+                            <td>
+                                {% if row.needs_municipality %}
+                                <input type="text" name="muni_{{ row.account_number }}" placeholder="e.g. Kathmandu MC">
+                                {% else %}
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="6" style="text-align: center; padding: 3rem; color: var(--text-muted);">
+                                No missing data found!
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="display: flex; gap: 1rem; margin-top: 2rem; justify-content: flex-end; align-items: center;">
+                <a href="{% url 'finalize_report' unique_id %}" style="color: var(--text-muted); text-decoration: none; font-weight: 500; font-size: 0.95rem;">Cancel & Proceed Without Updates</a>
+                <button type="submit" class="btn-submit">Apply Mappings</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

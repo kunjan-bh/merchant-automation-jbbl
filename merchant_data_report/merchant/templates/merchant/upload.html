@@ -43,7 +43,7 @@
         .container {
             background-color: var(--card-bg);
             width: 100%;
-            max-width: 500px;
+            max-width: 768px;
             padding: 2.5rem;
             border-radius: 16px;
             box-shadow: var(--shadow-lg);
@@ -205,9 +205,191 @@
             background-color: var(--accent-color);
             color: white;
         }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* Loading Overlay Styles (Claude-like) */
+        #loadingOverlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .processing-card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px -15px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.05);
+            width: 100%;
+            max-width: 420px;
+            text-align: left;
+            transform: translateY(20px);
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .processing-card h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            color: #0f172a;
+        }
+
+        .main-spinner {
+            width: 20px; height: 20px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        .step-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.95rem;
+            color: #64748b;
+            transition: all 0.3s ease;
+            opacity: 0.5;
+            transform: translateX(-5px);
+        }
+
+        .step.active {
+            opacity: 1;
+            color: #0f172a;
+            transform: translateX(0);
+        }
+
+        .step.completed {
+            opacity: 1;
+            color: #334155;
+            transform: translateX(0);
+        }
+
+        .step-icon-wrapper {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .status-dot {
+            width: 6px; height: 6px;
+            background: #cbd5e1;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+        }
+
+        .step-spinner {
+            width: 16px; height: 16px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: none;
+        }
+
+        .check-icon {
+            color: #10b981;
+            display: none;
+            width: 18px; height: 18px;
+        }
+
+        .step.active .status-dot { display: none; }
+        .step.active .step-spinner { display: block; }
+        
+        .step.completed .status-dot { display: none; }
+        .step.completed .step-spinner { display: none; }
+        .step.completed .check-icon { display: block; animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @keyframes popIn { 
+            0% { transform: scale(0.5); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
     </style>
 </head>
 <body>
+
+    <!-- Claude-like Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="processing-card" id="processingCard">
+            <h3><div class="main-spinner"></div> Executing Data Pipeline</h3>
+            <div class="step-container">
+                <div class="step pending" id="step1">
+                    <div class="step-icon-wrapper">
+                        <div class="status-dot"></div>
+                        <div class="step-spinner"></div>
+                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <span>Verifying Excel file constraints...</span>
+                </div>
+                <div class="step pending" id="step2">
+                    <div class="step-icon-wrapper">
+                        <div class="status-dot"></div>
+                        <div class="step-spinner"></div>
+                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <span>Extracting FonePay & Nepal Pay tables...</span>
+                </div>
+                <div class="step pending" id="step3">
+                    <div class="step-icon-wrapper">
+                        <div class="status-dot"></div>
+                        <div class="step-spinner"></div>
+                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <span>Querying Core Banking (CBS) Database...</span>
+                </div>
+                <div class="step pending" id="step4">
+                    <div class="step-icon-wrapper">
+                        <div class="status-dot"></div>
+                        <div class="step-spinner"></div>
+                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <span>Patching missing categories mapping...</span>
+                </div>
+                <div class="step pending" id="step5">
+                    <div class="step-icon-wrapper">
+                        <div class="status-dot"></div>
+                        <div class="step-spinner"></div>
+                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                    </div>
+                    <span>Generating final aggregations...</span>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <div class="container">
         <div style="text-align: left; margin-bottom: 2rem;">
@@ -283,6 +465,105 @@
                 <a href="{% url 'download_sheet' nepalpay_step2_filename %}" class="btn-download">Download</a>
             </div>
         </div>
+
+        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem;">
+            <h2 style="font-size: 1.25rem;">Data Category Filtration & Testing</h2>
+            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left;">Category breakdown for Province and District for separate providers (Step 2 Enriched Data).</p>
+            
+            <div style="display: flex; gap: 1rem; text-align: left; margin-bottom: 1.5rem;">
+                <!-- Fonepay Province Breakdown -->
+                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent-color);">Fonepay Provinces</h3>
+                    <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
+                        {% for prov, count in fonepay_provinces.items %}
+                            <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
+                                <span>{{ prov }}</span>
+                                <span style="font-weight: 600;">{{ count }}</span>
+                            </li>
+                        {% empty %}
+                            <li style="color: var(--text-muted);">No Province Data</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <!-- Fonepay District Breakdown -->
+                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent-color);">Fonepay Districts</h3>
+                    <div style="max-height: 200px; overflow-y: auto; padding-right: 0.5rem;" class="custom-scrollbar">
+                        <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
+                            {% for dist, count in fonepay_districts.items %}
+                                <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
+                                    <span>{{ dist }}</span>
+                                    <span style="font-weight: 600;">{{ count }}</span>
+                                </li>
+                            {% empty %}
+                                <li style="color: var(--text-muted);">No District Data</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 1rem; text-align: left;">
+                <!-- Nepal Pay Province Breakdown -->
+                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #0284c7;">Nepal Pay Provinces</h3>
+                    <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
+                        {% for prov, count in nepalpay_provinces.items %}
+                            <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
+                                <span>{{ prov }}</span>
+                                <span style="font-weight: 600;">{{ count }}</span>
+                            </li>
+                        {% empty %}
+                            <li style="color: var(--text-muted);">No Province Data</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <!-- Nepal Pay District Breakdown -->
+                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #0284c7;">Nepal Pay Districts</h3>
+                    <div style="max-height: 200px; overflow-y: auto; padding-right: 0.5rem;" class="custom-scrollbar">
+                        <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
+                            {% for dist, count in nepalpay_districts.items %}
+                                <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
+                                    <span>{{ dist }}</span>
+                                    <span style="font-weight: 600;">{{ count }}</span>
+                                </li>
+                            {% empty %}
+                                <li style="color: var(--text-muted);">No District Data</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% if action_required %}
+        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem; background-color: #fef2f2; border-radius: 8px; padding: 1.25rem; border: 1px solid #fecaca;">
+            <h2 style="font-size: 1.25rem; color: #991b1b;">⚠️ Action Required: Missing Data Detected</h2>
+            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left; color: #b91c1c;">
+                Some accounts are still missing Province, District, or Municipality data, even after checking the CBS database.
+            </p>
+            
+            <div style="display: flex; gap: 1rem; justify-content: flex-start;">
+                <a href="{% url 'finalize_report' unique_id %}" class="btn-submit" style="background-color: #6b7280; text-decoration: none; display: inline-block; width: auto; padding: 0.75rem 1.5rem; margin-top: 0; text-align: center;">Proceed Anyway (Keep Nulls)</a>
+                <a href="{% url 'review_missing_data' unique_id %}" class="btn-submit" style="background-color: #dc2626; text-decoration: none; display: inline-block; width: auto; padding: 0.75rem 1.5rem; margin-top: 0; text-align: center;">Manually Update Missing Data</a>
+            </div>
+        </div>
+        {% elif step3_filename %}
+        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem; background-color: #f8fafc; border-radius: 8px; padding: 1.25rem;">
+            <h2 style="font-size: 1.25rem; color: #0369a1;">Step 3: Final Report Generation</h2>
+            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left;">Aggregated data according to Province, Local Level, District, and Gender.</p>
+            
+            <div class="result-card" style="border-color: #bae6fd;">
+                <div class="result-info">
+                    <h3 style="color: #0f172a;">Additional Payment Report ASCII</h3>
+                    <p>4 Sheets containing final formatted aggregation</p>
+                </div>
+                <a href="{% url 'download_sheet' step3_filename %}" class="btn-download" style="background-color: #0284c7; color: white; border: none;">Download Report</a>
+            </div>
+        </div>
+        {% endif %}
+        
         {% endif %}
     </div>
 
@@ -319,6 +600,50 @@
                 fileInput.files = e.dataTransfer.files;
                 fileNameDisplay.textContent = 'Selected: ' + e.dataTransfer.files[0].name;
                 fileNameDisplay.style.display = 'block';
+            }
+        });
+
+        // Form Submission - Loader Logic
+        const uploadForm = document.getElementById('uploadForm');
+        uploadForm.addEventListener('submit', function(e) {
+            if (fileInput.files.length > 0) {
+                const overlay = document.getElementById('loadingOverlay');
+                const card = document.getElementById('processingCard');
+                
+                // Show Overlay
+                overlay.style.display = 'flex';
+                // Trigger reflow to start transition
+                void overlay.offsetWidth; 
+                overlay.style.opacity = '1';
+                card.style.transform = 'translateY(0)';
+
+                const totalSteps = 5;
+                // Realistic staggered wait times in milliseconds
+                const simulatedDelays = [400, 1100, 1800, 2500, 2900];
+
+                function activateStep(n) {
+                    if(n > 1) {
+                        const prev = document.getElementById('step' + (n-1));
+                        if(prev) {
+                            prev.classList.remove('active');
+                            prev.classList.add('completed');
+                        }
+                    }
+                    if(n <= totalSteps) {
+                        const current = document.getElementById('step' + n);
+                        if(current) {
+                            current.classList.remove('pending');
+                            current.classList.add('active');
+                        }
+                    }
+                }
+
+                activateStep(1);
+                simulatedDelays.forEach((delay, idx) => {
+                    setTimeout(() => {
+                        activateStep(idx + 2); // Start applying next steps
+                    }, delay);
+                });
             }
         });
     </script>

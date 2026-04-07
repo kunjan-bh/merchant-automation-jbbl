@@ -1,12 +1,286 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.contrib import messages
 from django.http import FileResponse, Http404
 from django.conf import settings
+from django.urls import reverse
 import pandas as pd
 import os
 import uuid
 import random
 from .models import CBSMerchant
+
+# --- HELPER FUNCTIONS ---
+
+def is_empty(val):
+    return pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'null'
+
+def filter_dataframe(df, requested_cols):
+    cols_to_keep = []
+    for col in df.columns:
+        norm_col = str(col).lower().replace(' ', '').replace('_', '')
+        if norm_col in requested_cols:
+            cols_to_keep.append(col)
+    return df[cols_to_keep] if cols_to_keep else df
+
+def find_account_col(df):
+    for col in df.columns:
+        if str(col).lower().replace(' ', '').replace('_', '') == 'accountnumber':
+            return col
+    return None
+
+def find_col_by_norm(df, norm_name):
+    """Find column in dataframe by normalized name (case/space/underscore insensitive)."""
+    for col in df.columns:
+        if str(col).lower().replace(' ', '').replace('_', '') == norm_name:
+            return col
+    return None
+
+def get_fill_col(acc_col_name, cbs_lookup):
+    def fill_col(r, col_name, cbs_col=None):
+        if not cbs_col: cbs_col = col_name
+        # Case-insensitive column lookup in the row
+        val = None
+        for key in r.index:
+            if str(key).lower().replace(' ', '').replace('_', '') == col_name.lower():
+                val = r.get(key)
+                break
+        if is_empty(val):
+            acc = str(r.get(acc_col_name)).strip()
+            if not cbs_lookup.empty and acc in cbs_lookup.index:
+                v = cbs_lookup.loc[acc, cbs_col]
+                return v.iloc[0] if isinstance(v, pd.Series) else v
+        return val
+    return fill_col
+
+def check_missing_records(df, required_cols, index_col):
+    missing_dict = {}
+    if df is None or df.empty or not index_col or index_col not in df.columns:
+        return missing_dict
+    for _, row in df.iterrows():
+        acc = str(row.get(index_col)).strip()
+        if not acc or is_empty(acc): continue
+        missing = [c for c in required_cols if is_empty(row.get(c))]
+        if missing:
+            if acc not in missing_dict:
+                missing_dict[acc] = {
+                    'account_number': acc,
+                    'address_1': str(row.get('address_1', '')),
+                    'address_2': str(row.get('address_2', '')),
+                    'needs_province': 'province' in missing,
+                    'needs_district': 'district' in missing,
+                    'needs_municipality': 'municipality' in missing,
+                }
+            else:
+                for m in missing:
+                    missing_dict[acc][f'needs_{m}'] = True
+    return missing_dict
+
+# --- MAPPERS ---
+
+provinces_list = ['Koshi', 'Madhesh', 'Bagmati', 'Gandaki', 'Lumbini', 'Karnali', 'Sudurpaschim']
+def map_province(p):
+    if pd.isna(p) or str(p).strip() == '': return 'Unmatched'
+    p_norm = str(p).lower().replace(' ', '').replace('_', '')
+    if '1' in p_norm or 'koshi' in p_norm: return 'Koshi'
+    if '2' in p_norm or 'madh' in p_norm: return 'Madhesh'
+    if '3' in p_norm or 'bagm' in p_norm: return 'Bagmati'
+    if '4' in p_norm or 'gand' in p_norm: return 'Gandaki'
+    if '5' in p_norm or 'lumb' in p_norm: return 'Lumbini'
+    if '6' in p_norm or 'karn' in p_norm: return 'Karnali'
+    if '7' in p_norm or 'sudur' in p_norm or 'sughar' in p_norm: return 'Sudurpaschim'
+    return 'Unmatched'
+
+districts_list = [
+    "Bhojpur District", "Dhankuta District", "Ilam District", "Jhapa District", "Khotang District", "Morang District", "Okhaldhunga District", "Panchthar District", "Sankhuwasabha District", "Solukhumbu District", "Sunsari District", "Taplejung District", "Tehrathum District", "Udayapur District", "Bara District", "Parsa District", "Rautahat District", "Sarlahi District", "Dhanusha District", "Siraha District", "Mahottari District", "Saptari District", "Sindhuli District", "Ramechhap District", "Dolakha District", "Bhaktapur District", "Dhading District", "Kathmandu District", "Kavrepalanchok District", "Lalitpur District", "Nuwakot District", "Rasuwa District", "Sindhupalchok District", "Chitwan District", "Makwanpur District", "Baglung District", "Gorkha District", "Kaski District", "Lamjung District", "Manang District", "Mustang District", "Myagdi District", "Nawalpur District", "Parbat District", "Syangja District", "Tanahun District", "Arghakhanchi District", "Gulmi District", "Kapilvastu District", "Parasi District", "Palpa District", "Rupandehi District", "Banke District", "Bardiya District", "Dang District", "Pyuthan District", "Rolpa District", "Rukum East District", "Dailekh District", "Dolpa District", "Humla District", "Jajarkot District", "Jumla District", "Kalikot District", "Mugu District", "Rukum West District", "Surkhet District", "Achham District", "Baitadi District", "Bajhang District", "Bajura District", "Dadeldhura District", "Darchula District", "Doti District", "Kailali District", "Kanchanpur District"
+]
+def map_district(d):
+    if pd.isna(d) or str(d).strip() == '': return 'Unmatched'
+    d_str = str(d).strip().title()
+    if not d_str.endswith(" District"): d_str += " District"
+    if d_str not in districts_list: return 'Unmatched'
+    return d_str
+
+local_cats = ['Metropolitan Cities', 'Sub-Metropolitan Cities', 'Municipalities', 'Rural Municipalities']
+def map_local(m):
+    if pd.isna(m) or str(m).strip() == '': return 'Unmatched'
+    m_str = str(m).strip().upper()
+    if 'SMC' in m_str or 'SUB' in m_str: return 'Sub-Metropolitan Cities'
+    if 'MC' in m_str or 'METRO' in m_str: return 'Metropolitan Cities'
+    if 'RM' in m_str or 'RURAL' in m_str: return 'Rural Municipalities'
+    if 'M' in m_str or 'MUN' in m_str: return 'Municipalities'
+    return 'Unmatched'
+
+gender_cats = ['Male', 'Female', 'Others (Gender other than Male and Female)', 'Company']
+def map_gender(g):
+    if pd.isna(g) or str(g).strip() == '': return 'Unmatched'
+    g_str = str(g).strip().upper()
+    if g_str in ['M', 'MALE']: return 'Male'
+    if g_str in ['F', 'FEMALE']: return 'Female'
+    if g_str in ['O', 'OTHER', 'OTHERS']: return 'Others (Gender other than Male and Female)'
+    if g_str in ['C', 'COMPANY']: return 'Company'
+    return 'Unmatched'
+
+def get_prov_counts(df):
+    counts = {p: 0 for p in provinces_list}
+    if df is not None and not df.empty and 'province' in df.columns:
+        mapped = df['province'].apply(map_province)
+        for k, v in mapped.value_counts().items():
+            if k in counts: 
+                counts[k] += v
+            elif k != 'Unmatched': 
+                counts[k] = v
+    return counts
+
+def get_dist_counts(df):
+    if df is not None and not df.empty and 'district' in df.columns:
+        mapped = df['district'].apply(map_district)
+        counts = mapped.value_counts().to_dict()
+        if 'Unmatched' in counts:
+            del counts['Unmatched']
+        return counts
+    return {}
+
+# --- BUSINESS LOGIC ---
+
+def generate_mock_data(all_accounts, nepalpay_accs=None, source_null_province=None, source_null_district=None):
+    if nepalpay_accs is None: nepalpay_accs = set()
+    if source_null_province is None: source_null_province = set()
+    if source_null_district is None: source_null_district = set()
+    
+    # Delete old mock data and regenerate fresh for this upload
+    CBSMerchant.objects.filter(account_number__in=all_accounts).delete()
+    
+    mock_municipality_options = ["Kathmandu MC", "Lalitpur SMC", "Byans RM", "Bharatpur MC", "Hetauda SMC", "Birendranagar M", "Pokhara MC"]
+    
+    mock_merchants = []
+    for acc in all_accounts:
+        # Mirror source NULLs: if source has NULL province/district, CBS should too
+        muni = "" if acc in nepalpay_accs else random.choice(mock_municipality_options)
+        prov = "" if acc in source_null_province else random.choice(provinces_list)
+        dist = "" if acc in source_null_district else random.choice(districts_list)
+        
+        mock_merchants.append(CBSMerchant(
+            merchant_id=f"M_{acc}_{random.randint(1000, 9999)}",
+            merchant_code=f"C_{random.randint(100, 999)}",
+            account_number=acc,
+            province=prov,
+            district=dist,
+            municipality=muni,
+            address_1=f"{random.randint(1, 100)} Random Marga",
+            address_2=random.choice([f"Ward {random.randint(1, 32)}", "Near Branch", ""]),
+            gender=random.choice(['M', 'F', 'O', 'C']),
+            age=random.randint(18, 70),
+        ))
+    if mock_merchants:
+        CBSMerchant.objects.bulk_create(mock_merchants)
+
+def perform_step1_and_2(file, unique_id):
+    fonepay_df = pd.read_excel(file, sheet_name='fonepay')
+    nepalpay_df = pd.read_excel(file, sheet_name='nepalpay')
+    
+    fonepay_requested = ['merchantid', 'accountnumber', 'province', 'district', 'municipality', 'amount', 'tax', 'taxes', 'count']
+    nepalpay_requested = ['province', 'district', 'accountnumber', 'merchantcode']
+    
+    fonepay_df = filter_dataframe(fonepay_df, fonepay_requested)
+    nepalpay_df = filter_dataframe(nepalpay_df, nepalpay_requested)
+    
+    fonepay_acc_col = find_account_col(fonepay_df)
+    nepalpay_acc_col = find_account_col(nepalpay_df)
+    
+    fonepay_accs = set()
+    nepalpay_accs = set()
+    if fonepay_acc_col and fonepay_acc_col in fonepay_df.columns:
+        fonepay_accs.update(fonepay_df[fonepay_acc_col].dropna().astype(str).tolist())
+    if nepalpay_acc_col and nepalpay_acc_col in nepalpay_df.columns:
+        nepalpay_accs.update(nepalpay_df[nepalpay_acc_col].dropna().astype(str).tolist())
+        
+    all_accounts = fonepay_accs | nepalpay_accs
+    
+    # Identify accounts with NULL province/district in the SOURCE data
+    # so mock CBS mirrors those NULLs (won't fabricate random values)
+    source_null_province = set()
+    source_null_district = set()
+    
+    fp_prov_col = find_col_by_norm(fonepay_df, 'province')
+    fp_dist_col = find_col_by_norm(fonepay_df, 'district')
+    np_prov_col = find_col_by_norm(nepalpay_df, 'province')
+    np_dist_col = find_col_by_norm(nepalpay_df, 'district')
+    
+    if fonepay_acc_col:
+        for _, row in fonepay_df.iterrows():
+            acc = str(row.get(fonepay_acc_col, '')).strip()
+            if not acc or is_empty(acc): continue
+            if fp_prov_col and is_empty(row.get(fp_prov_col)):
+                source_null_province.add(acc)
+            if fp_dist_col and is_empty(row.get(fp_dist_col)):
+                source_null_district.add(acc)
+    
+    if nepalpay_acc_col:
+        for _, row in nepalpay_df.iterrows():
+            acc = str(row.get(nepalpay_acc_col, '')).strip()
+            if not acc or is_empty(acc): continue
+            if np_prov_col and is_empty(row.get(np_prov_col)):
+                source_null_province.add(acc)
+            if np_dist_col and is_empty(row.get(np_dist_col)):
+                source_null_district.add(acc)
+    
+    generate_mock_data(all_accounts, nepalpay_accs, source_null_province, source_null_district)
+    
+    all_cbs_data = pd.DataFrame(list(CBSMerchant.objects.filter(account_number__in=all_accounts).values(
+        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender', 'age'
+    )))
+    
+    cbs_lookup = all_cbs_data.set_index('account_number') if not all_cbs_data.empty else pd.DataFrame()
+
+    fonepay_step2_df = fonepay_df.copy()
+    nepalpay_step2_df = nepalpay_df.copy()
+
+    def safe_get_cbs(acc, col):
+        if not cbs_lookup.empty and acc in cbs_lookup.index:
+            val = cbs_lookup.loc[acc, col]
+            return val.iloc[0] if isinstance(val, pd.Series) else val
+        return None
+
+    if fonepay_acc_col:
+        fill_fp = get_fill_col(fonepay_acc_col, cbs_lookup)
+        fonepay_step2_df['province'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'province'), axis=1)
+        fonepay_step2_df['district'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'district'), axis=1)
+        fonepay_step2_df['municipality'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'municipality'), axis=1)
+        
+        fonepay_step2_df['gender'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'gender'), axis=1)
+        fonepay_step2_df['age'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'age'), axis=1)
+        fonepay_step2_df['address_1'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'address_1'), axis=1)
+        fonepay_step2_df['address_2'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'address_2'), axis=1)
+
+    if nepalpay_acc_col:
+        fill_np = get_fill_col(nepalpay_acc_col, cbs_lookup)
+        nepalpay_step2_df['province'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'province'), axis=1)
+        nepalpay_step2_df['district'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'district'), axis=1)
+        
+        # Pull Municipality from CBS if empty
+        nepalpay_step2_df['municipality'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'municipality'), axis=1)
+        
+        nepalpay_step2_df['gender'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'gender'), axis=1)
+        nepalpay_step2_df['age'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'age'), axis=1)
+        nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'address_1'), axis=1)
+        nepalpay_step2_df['address_2'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'address_2'), axis=1)
+
+    output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    f_path1 = os.path.join(output_dir, f'step1_fonepay_{unique_id}.xlsx')
+    n_path1 = os.path.join(output_dir, f'step1_nepalpay_{unique_id}.xlsx')
+    f_path2 = os.path.join(output_dir, f'step2_fonepay_{unique_id}.xlsx')
+    n_path2 = os.path.join(output_dir, f'step2_nepalpay_{unique_id}.xlsx')
+    
+    fonepay_df.to_excel(f_path1, index=False)
+    nepalpay_df.to_excel(n_path1, index=False)
+    fonepay_step2_df.to_excel(f_path2, index=False)
+    nepalpay_step2_df.to_excel(n_path2, index=False)
+    
+    return fonepay_df, nepalpay_df, fonepay_step2_df, nepalpay_step2_df
+
+# --- VIEWS ---
 
 def upload_merchant_data(request):
     if request.method == 'POST':
@@ -15,134 +289,230 @@ def upload_merchant_data(request):
             return render(request, 'merchant/upload.html')
             
         file = request.FILES['file']
-        
         if not file.name.endswith(('.xlsx', '.xls')):
             messages.error(request, 'Please upload a valid Excel file (.xlsx or .xls).')
             return render(request, 'merchant/upload.html')
             
         try:
-            # Read the Fonepay sheet
-            fonepay_df = pd.read_excel(file, sheet_name='fonepay')
-            # Read the Nepal Pay sheet
-            nepalpay_df = pd.read_excel(file, sheet_name='nepalpay')
-            
-            # Helper to filter columns based on a normalized match
-            def filter_dataframe(df, requested_cols):
-                cols_to_keep = []
-                for col in df.columns:
-                    norm_col = str(col).lower().replace(' ', '').replace('_', '')
-                    if norm_col in requested_cols:
-                        cols_to_keep.append(col)
-                # If we didn't match any columns, just return the original dataframe to avoid empty file errors
-                return df[cols_to_keep] if cols_to_keep else df
-
-            fonepay_requested = ['merchantid', 'accountnumber', 'province', 'district', 'municipality', 'amount', 'tax', 'taxes', 'count']
-            nepalpay_requested = ['province', 'district', 'accountnumber', 'merchantcode']
-            
-            # Filter the DataFrames
-            fonepay_df = filter_dataframe(fonepay_df, fonepay_requested)
-            nepalpay_df = filter_dataframe(nepalpay_df, nepalpay_requested)
-            
-            # --- START STEP 2 LOGIC ---
-            def find_account_col(df):
-                for col in df.columns:
-                    if str(col).lower().replace(' ', '').replace('_', '') == 'accountnumber':
-                        return col
-                return None
-            
-            fonepay_acc_col = find_account_col(fonepay_df)
-            nepalpay_acc_col = find_account_col(nepalpay_df)
-            
-            all_accounts = set()
-            if fonepay_acc_col and fonepay_acc_col in fonepay_df.columns:
-                all_accounts.update(fonepay_df[fonepay_acc_col].dropna().astype(str).tolist())
-            if nepalpay_acc_col and nepalpay_acc_col in nepalpay_df.columns:
-                all_accounts.update(nepalpay_df[nepalpay_acc_col].dropna().astype(str).tolist())
-                
-            existing_merchants = CBSMerchant.objects.filter(account_number__in=all_accounts)
-            existing_accounts = set(existing_merchants.values_list('account_number', flat=True))
-            missing_accounts = all_accounts - existing_accounts
-            
-            mock_merchants = []
-            for acc in missing_accounts:
-                mock_merchants.append(CBSMerchant(
-                    merchant_id=f"M_{acc}_{random.randint(1000, 9999)}",
-                    merchant_code=f"C_{random.randint(100, 999)}",
-                    account_number=acc,
-                    province=random.choice(["Province 1", "Madhesh", "Bagmati", "Gandaki", "Lumbini"]),
-                    district=random.choice(["Kathmandu", "Lalitpur", "Bhaktapur", "Pokhara", "Chitwan"]),
-                    municipality=random.choice(["KMC", "LMC", "PMC", "BHR", "BKT"]),
-                    address_1=f"{random.randint(1, 100)} Random St",
-                    address_2=random.choice([f"Ward {random.randint(1, 32)}", "Near ATM", ""]),
-                    gender=random.choice(['M', 'F', 'O']),
-                    age=random.randint(18, 70),
-                ))
-            
-            if mock_merchants:
-                CBSMerchant.objects.bulk_create(mock_merchants)
-                
-            all_cbs_data = pd.DataFrame(list(CBSMerchant.objects.filter(account_number__in=all_accounts).values(
-                'account_number', 'address_1', 'address_2', 'gender', 'age', 'municipality'
-            )))
-            
-            fonepay_step2_df = fonepay_df.copy()
-            nepalpay_step2_df = nepalpay_df.copy()
-            
-            if not all_cbs_data.empty:
-                if fonepay_acc_col:
-                    fonepay_step2_df[fonepay_acc_col] = fonepay_step2_df[fonepay_acc_col].astype(str)
-                    cbs_fonepay = all_cbs_data[['account_number', 'address_1', 'address_2', 'gender', 'age']].rename(columns={'account_number': fonepay_acc_col})
-                    fonepay_step2_df = fonepay_step2_df.merge(cbs_fonepay, on=fonepay_acc_col, how='left')
-                
-                if nepalpay_acc_col:
-                    nepalpay_step2_df[nepalpay_acc_col] = nepalpay_step2_df[nepalpay_acc_col].astype(str)
-                    cbs_nepalpay = all_cbs_data[['account_number', 'address_1', 'address_2', 'gender', 'age', 'municipality']].copy()
-                    cbs_nepalpay['municipality'] = None  # Force null per requirements
-                    cbs_nepalpay = cbs_nepalpay.rename(columns={'account_number': nepalpay_acc_col})
-                    nepalpay_step2_df = nepalpay_step2_df.merge(cbs_nepalpay, on=nepalpay_acc_col, how='left')
-            # --- END STEP 2 LOGIC ---
-            
-            # Create a directory to store the separated files temporarily
-            output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
-            os.makedirs(output_dir, exist_ok=True)
-            
-            # Generate unique filenames to avoid collision
             unique_id = str(uuid.uuid4())[:8]
-            fonepay_filename = f'step1_fonepay_{unique_id}.xlsx'
-            nepalpay_filename = f'step1_nepalpay_{unique_id}.xlsx'
-            fonepay_step2_filename = f'step2_fonepay_{unique_id}.xlsx'
-            nepalpay_step2_filename = f'step2_nepalpay_{unique_id}.xlsx'
+            f_df, n_df, f_step2, n_step2 = perform_step1_and_2(file, unique_id)
             
-            fonepay_path = os.path.join(output_dir, fonepay_filename)
-            nepalpay_path = os.path.join(output_dir, nepalpay_filename)
-            fonepay_step2_path = os.path.join(output_dir, fonepay_step2_filename)
-            nepalpay_step2_path = os.path.join(output_dir, nepalpay_step2_filename)
+            fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
+            np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
             
-            # Save the separated dataframes back to new Excel files
-            fonepay_df.to_excel(fonepay_path, index=False)
-            nepalpay_df.to_excel(nepalpay_path, index=False)
-            fonepay_step2_df.to_excel(fonepay_step2_path, index=False)
-            nepalpay_step2_df.to_excel(nepalpay_step2_path, index=False)
+            has_missing = bool(fp_missing or np_missing)
             
-            messages.success(request, 'Successfully processed and enriched the data sheets!')
-            
-            # Return template with context to show download buttons
-            context = {
-                'fonepay_count': len(fonepay_df),
-                'nepalpay_count': len(nepalpay_df),
-                'fonepay_filename': fonepay_filename,
-                'nepalpay_filename': nepalpay_filename,
-                'fonepay_step2_filename': fonepay_step2_filename,
-                'nepalpay_step2_filename': nepalpay_step2_filename,
-            }
-            return render(request, 'merchant/upload.html', context)
-            
+            if has_missing:
+                # Need manual intervention
+                context = {
+                    'unique_id': unique_id,
+                    'action_required': True,
+                    'fonepay_count': len(f_df),
+                    'nepalpay_count': len(n_df),
+                    'fonepay_filename': f'step1_fonepay_{unique_id}.xlsx',
+                    'nepalpay_filename': f'step1_nepalpay_{unique_id}.xlsx',
+                    'fonepay_step2_filename': f'step2_fonepay_{unique_id}.xlsx',
+                    'nepalpay_step2_filename': f'step2_nepalpay_{unique_id}.xlsx',
+                }
+                return render(request, 'merchant/upload.html', context)
+            else:
+                # Straight to final report
+                return redirect('finalize_report', unique_id=unique_id)
+                
         except ValueError as e:
-            messages.error(request, f'Error reading sheets (Ensure "fonepay" and "nepalpay" exist in the document): {str(e)}')
+            messages.error(request, f'Error reading sheets: {str(e)}')
         except Exception as e:
             messages.error(request, f'An unexpected error occurred: {str(e)}')
             
     return render(request, 'merchant/upload.html')
+
+def review_missing_data(request, unique_id):
+    f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
+    n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+    
+    if not os.path.exists(f_path2) or not os.path.exists(n_path2):
+        raise Http404("Processed Data Files not found. They might have been deleted.")
+        
+    f_step2 = pd.read_excel(f_path2, dtype=str)
+    n_step2 = pd.read_excel(n_path2, dtype=str)
+    
+    fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
+    np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
+    
+    all_missing = []
+    for acc, data in fp_missing.items():
+        data['platform'] = 'FonePay'
+        all_missing.append(data)
+    for acc, data in np_missing.items():
+        if acc not in fp_missing:
+            data['platform'] = 'Nepal Pay'
+            all_missing.append(data)
+            
+    return render(request, 'merchant/review_missing_data.html', {
+        'unique_id': unique_id,
+        'missing_records': all_missing,
+        'provinces_list': provinces_list,
+        'districts_list': districts_list,
+    })
+
+def apply_manual_mapping(request, unique_id):
+    if request.method == 'POST':
+        f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
+        n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+        
+        f_step2 = pd.read_excel(f_path2)
+        n_step2 = pd.read_excel(n_path2)
+        
+        f_acc_col = find_account_col(f_step2)
+        n_acc_col = find_account_col(n_step2)
+        
+        updates = {}
+        for key, val in request.POST.items():
+            if val and str(val).strip() and val != 'Ignore':
+                parts = key.split('_', 1)
+                if len(parts) == 2 and parts[0] in ['prov', 'dist', 'muni']:
+                    col_map = {'prov': 'province', 'dist': 'district', 'muni': 'municipality'}
+                    col = col_map[parts[0]]
+                    acc = parts[1]
+                    if acc not in updates: updates[acc] = {}
+                    updates[acc][col] = str(val).strip()
+                    
+        def patch_df(df, acc_col):
+            if not acc_col or df.empty: return df
+            for idx, r in df.iterrows():
+                acc = str(r.get(acc_col)).strip()
+                if acc in updates:
+                    for col, new_val in updates[acc].items():
+                        if col in df.columns and is_empty(r.get(col)):
+                            df.at[idx, col] = new_val
+            return df
+            
+        f_step2 = patch_df(f_step2, f_acc_col)
+        n_step2 = patch_df(n_step2, n_acc_col)
+        
+        f_step2.to_excel(f_path2, index=False)
+        n_step2.to_excel(n_path2, index=False)
+        
+        messages.success(request, 'Successfully applied manual data mappings!')
+        return redirect('finalize_report', unique_id=unique_id)
+    return redirect('upload_merchant_data')
+
+def finalize_report(request, unique_id):
+    f_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_fonepay_{unique_id}.xlsx')
+    n_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_nepalpay_{unique_id}.xlsx')
+    f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
+    n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+    
+    if not all(os.path.exists(p) for p in [f_path2, n_path2]):
+        raise Http404("Processed Step 2 files missing.")
+        
+    f_step2 = pd.read_excel(f_path2)
+    n_step2 = pd.read_excel(n_path2)
+    f_acc_col = find_account_col(f_step2)
+    n_acc_col = find_account_col(n_step2)
+    
+    def get_norm_df(df, acc_col):
+        if df is None or df.empty or not acc_col: return pd.DataFrame()
+        temp = pd.DataFrame()
+        temp['account_number'] = df[acc_col]
+        for p in ['province', 'district', 'municipality', 'gender']:
+            found = False
+            for c in df.columns:
+                if str(c).lower().replace(' ', '').replace('_', '') == p:
+                    temp[p] = df[c]
+                    found = True; break
+            if not found: temp[p] = None
+        return temp
+
+    p1 = get_norm_df(f_step2, f_acc_col)
+    p2 = get_norm_df(n_step2, n_acc_col)
+    all_merchants_df = pd.concat([p1, p2], ignore_index=True)
+
+    def create_report_format(all_data, target_col, cats, index_col_name, map_func=None):
+        if not all_data.empty and target_col in all_data.columns:
+            mapped_series = all_data[target_col].apply(map_func) if map_func else all_data[target_col]
+            counts = mapped_series.value_counts().to_dict()
+        else: counts = {}
+            
+        final_df = pd.DataFrame()
+        final_df[f'POS-enabled Merchants ({index_col_name}):'] = cats
+        final_df['POS No. of Merchants'] = 0
+        final_df[''] = '' 
+        final_df[f'QR-enabled Merchants ({index_col_name}):'] = cats
+        final_df['QR No. of Merchants'] = [counts.get(c, 0) for c in cats]
+        final_df[' '] = '' 
+        final_df[f'Online-enabled Merchants ({index_col_name}):'] = cats
+        final_df['Online No. of Merchants'] = 0
+        
+        total_row = pd.DataFrame([{
+            f'POS-enabled Merchants ({index_col_name}):': 'Total',
+            'POS No. of Merchants': 0, '': '',
+            f'QR-enabled Merchants ({index_col_name}):': 'Total',
+            'QR No. of Merchants': sum(counts.get(c, 0) for c in cats), ' ': '',
+            f'Online-enabled Merchants ({index_col_name}):': 'Total',
+            'Online No. of Merchants': 0
+        }])
+        return pd.concat([final_df, total_row], ignore_index=True)
+
+    df_province = create_report_format(all_merchants_df, 'province', provinces_list, 'Province-wise', map_func=map_province)
+    df_local = create_report_format(all_merchants_df, 'municipality', local_cats, 'Local Level-wise', map_func=map_local)
+    df_district = create_report_format(all_merchants_df, 'district', districts_list, 'District-wise', map_func=map_district)
+    
+    if not all_merchants_df.empty and 'gender' in all_merchants_df.columns:
+        g_counts = all_merchants_df['gender'].apply(map_gender).value_counts().to_dict()
+    else: g_counts = {}
+    
+    g_df = pd.DataFrame()
+    g_df['Gender of Proprietor(POS,QR-Enabled,Online Enabled)'] = gender_cats
+    g_df['No. of Merchants'] = [g_counts.get(c, 0) for c in gender_cats]
+    g_df = pd.concat([g_df, pd.DataFrame([{
+        'Gender of Proprietor(POS,QR-Enabled,Online Enabled)': 'Total',
+        'No. of Merchants': sum(g_counts.get(c, 0) for c in gender_cats)
+    }])], ignore_index=True)
+
+    step3_filename = f'Additional_Payment_Report_ASCII_{unique_id}.xlsx'
+    step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
+    
+    with pd.ExcelWriter(step3_path, engine='openpyxl') as writer:
+        def write_sheet(df, sheet_name, title):
+            if df.empty: df = pd.DataFrame(["No Data"])
+            df.to_excel(writer, sheet_name=sheet_name, startrow=1, index=False)
+            ws = writer.sheets[sheet_name]
+            ws.merge_cells('B1:G1')
+            ws['B1'] = title
+            from openpyxl.styles import Font, Alignment
+            ws['B1'].font = Font(bold=True)
+            ws['B1'].alignment = Alignment(horizontal='center')
+            
+        write_sheet(df_province, '3.No of Merchants_Province', 'Merchants Accepting Digital Payments (Onboarded by Licensed Institutions) As of Month end - Province Level wise')
+        write_sheet(df_local, '4.No of Merchants_Local', 'Merchants Accepting Digital Payments (Onboarded by Licensed Institutions) As of Month end - Local Level wise')
+        write_sheet(df_district, '5.No of Merchants_District', 'Merchants Accepting Digital Payments (Onboarded by Licensed Institutions) As of Month end - District Wise')
+        
+        g_df.to_excel(writer, sheet_name='6.Genderwise_Merchant', startrow=1, index=False)
+        ws = writer.sheets['6.Genderwise_Merchant']
+        ws.merge_cells('A1:B1')
+        ws['A1'] = 'Merchants Onboarded by Licensed Institutions-Gender Wise As of Month End'
+        from openpyxl.styles import Font
+        ws['A1'].font = Font(bold=True)
+
+    f_df_len = len(pd.read_excel(f_path1)) if os.path.exists(f_path1) else len(f_step2)
+    n_df_len = len(pd.read_excel(n_path1)) if os.path.exists(n_path1) else len(n_step2)
+
+    context = {
+        'fonepay_count': f_df_len,
+        'nepalpay_count': n_df_len,
+        'fonepay_filename': f'step1_fonepay_{unique_id}.xlsx',
+        'nepalpay_filename': f'step1_nepalpay_{unique_id}.xlsx',
+        'fonepay_step2_filename': f'step2_fonepay_{unique_id}.xlsx',
+        'nepalpay_step2_filename': f'step2_nepalpay_{unique_id}.xlsx',
+        'step3_filename': step3_filename,
+        'fonepay_provinces': get_prov_counts(f_step2),
+        'fonepay_districts': get_dist_counts(f_step2),
+        'nepalpay_provinces': get_prov_counts(n_step2),
+        'nepalpay_districts': get_dist_counts(n_step2),
+        'success': True
+    }
+    return render(request, 'merchant/upload.html', context)
 
 def download_sheet(request, filename):
     file_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', filename)
@@ -150,4 +520,3 @@ def download_sheet(request, filename):
         return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=filename)
     else:
         raise Http404("File not found")
-
