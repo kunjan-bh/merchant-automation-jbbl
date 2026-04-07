@@ -3,649 +3,605 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload Merchant Data</title>
-    <!-- Modern font from Google Fonts -->
+    <title>Merchant Report Generator — JBBL</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary-bg: #f9fafb;
-            --card-bg: #ffffff;
+            --blue: #1B5C99;
+            --blue-hover: #154a7a;
+            --blue-light: #81ADD2;
+            --blue-bg: #f0f7fc;
+            --orange: #D14623;
+            --bg-page: #f9fafb;
+            --bg-card: #ffffff;
             --text-main: #1f2937;
-            --text-muted: #6b7280;
-            --accent-color: #3b82f6;
-            --accent-hover: #2563eb;
-            --border-color: #e5e7eb;
+            --text-dim: #6b7280;
+            --border: #e5e7eb;
+            --success: #10b981;
             --success-bg: #ecfdf5;
-            --success-text: #065f46;
-            --error-bg: #fef2f2;
-            --error-text: #991b1b;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            --warn-bg: #fef2f2;
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg-page); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; }
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--primary-bg);
-            color: var(--text-main);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
+        /* ── Topbar ── */
+        .topbar { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 12px; }
+        .topbar .logo { 
+            width: 32px; height: 32px; background: var(--blue); border-radius: 8px; 
+            display: flex; align-items: center; justify-content: center; 
+            font-weight: 700; color: #fff; font-size: 0.8rem; letter-spacing: 0.5px;
         }
+        .topbar h1 { font-size: 1rem; font-weight: 600; color: var(--blue); }
+        .topbar .tag { margin-left: auto; font-size: 0.7rem; background: var(--blue-bg); color: var(--blue); padding: 4px 10px; border-radius: 12px; font-weight: 500;}
 
-        .container {
-            background-color: var(--card-bg);
-            width: 100%;
-            max-width: 768px;
-            padding: 2.5rem;
-            border-radius: 16px;
-            box-shadow: var(--shadow-lg);
-            text-align: center;
-            transition: transform 0.3s ease;
-        }
+        /* ── Layout ── */
+        .layout { flex: 1; display: flex; max-width: 1200px; margin: 0 auto; width: 100%; padding: 2rem; gap: 2rem; }
 
-        h2 {
-            font-size: 1.75rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-            color: var(--text-main);
-        }
-
-        p {
-            color: var(--text-muted);
-            margin-bottom: 2rem;
-            font-size: 0.95rem;
-        }
-
-        .upload-area {
-            border: 2px dashed var(--border-color);
+        /* ── Left Sidebar (Upload) ── */
+        .sidebar {
+            width: 340px; min-width: 340px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 12px;
-            padding: 3rem 2rem;
-            background-color: var(--primary-bg);
-            cursor: pointer;
-            transition: all 0.2s ease-in-out;
-            position: relative;
+            padding: 2rem;
+            display: flex; flex-direction: column;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            height: fit-content;
+        }
+        .sidebar h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-main); }
+        .sidebar .sub { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 1.5rem; line-height: 1.4;}
+
+        .drop-zone {
+            border: 2px dashed #d1d5db; border-radius: 8px; padding: 2rem 1rem;
+            text-align: center; cursor: pointer; transition: all 0.2s ease; position: relative;
+            background: #fdfdfd;
+        }
+        .drop-zone:hover, .drop-zone.dragover { border-color: var(--blue); background: var(--blue-bg); }
+        .drop-zone input { opacity: 0; position: absolute; inset: 0; cursor: pointer; z-index: 5; }
+        .drop-zone svg { width: 32px; height: 32px; color: var(--blue-light); margin-bottom: 0.75rem; transition: color 0.2s;}
+        .drop-zone:hover svg { color: var(--blue); }
+        .drop-zone .label { font-weight: 500; font-size: 0.9rem; color: var(--text-main);}
+        .drop-zone .hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.4rem; }
+
+        .file-badge {
+            display: none; margin-top: 1rem; padding: 0.75rem 1rem;
+            background: var(--blue-bg); border: 1px solid #cce4f6; border-radius: 8px;
+            font-size: 0.85rem; font-weight: 500; color: var(--blue);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .file-badge svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+        .btn-go {
+            margin-top: 1.5rem; width: 100%; padding: 0.85rem;
+            background: var(--blue); color: #fff; border: none; border-radius: 8px;
+            font-size: 0.95rem; font-weight: 500; cursor: pointer; transition: all 0.2s;
+            font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .btn-go:hover { background: var(--blue-hover); box-shadow: 0 4px 12px rgba(27, 92, 153, 0.2); }
+        .btn-go:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+
+        .msg-container { margin-bottom: 1rem; }
+        .msg { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 500; display:flex; gap:8px; align-items:flex-start;}
+        .msg.error { background: var(--warn-bg); color: var(--orange); border: 1px solid #fecaca; }
+        .msg svg { width: 18px; height: 18px; flex-shrink:0; margin-top:1px;}
+
+        /* ── Right Main Area ── */
+        .main { 
+            flex: 1; background: var(--bg-card); border: 1px solid var(--border); 
+            border-radius: 12px; padding: 3rem 4rem; position: relative;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            min-height: 500px;
         }
 
-        .upload-area:hover, .upload-area.dragover {
-            border-color: var(--accent-color);
-            background-color: #eff6ff;
-        }
+        .main-idle { text-align: center; color: #9ca3af; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;}
+        .main-idle svg { width: 48px; height: 48px; margin-bottom: 1rem; opacity: 0.4; }
+        .main-idle p { font-size: 1rem; font-weight: 500; color: var(--text-dim); }
+        .main-idle .hint { font-size: 0.85rem; color: #9ca3af; margin-top: 0.5rem; max-width: 250px; line-height: 1.5;}
 
-        .upload-area input[type="file"] {
-            opacity: 0;
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            cursor: pointer;
-        }
-
-        .upload-icon {
-            width: 48px;
-            height: 48px;
-            margin-bottom: 1rem;
-            color: var(--accent-color);
-        }
-
-        .upload-text {
-            font-weight: 500;
-            color: var(--text-main);
-        }
-
-        .upload-subtext {
-            display: block;
-            margin-top: 0.5rem;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        .btn-submit {
-            margin-top: 1.5rem;
-            width: 100%;
-            padding: 0.875rem;
-            background-color: var(--accent-color);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background-color 0.2s;
-            box-shadow: var(--shadow-md);
-        }
-
-        .btn-submit:hover {
-            background-color: var(--accent-hover);
-        }
-
-        .messages {
-            margin-bottom: 1.5rem;
-            text-align: left;
-        }
-
-        .message {
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 0.5rem;
-            font-size: 0.9rem;
-            font-weight: 500;
-        }
-
-        .message.success {
-            background-color: var(--success-bg);
-            color: var(--success-text);
-            border: 1px solid #a7f3d0;
-        }
-
-        .message.error {
-            background-color: var(--error-bg);
-            color: var(--error-text);
-            border: 1px solid #fecaca;
-        }
-
-        .file-name-display {
-            margin-top: 1rem;
-            font-weight: 600;
-            color: var(--accent-color);
-            display: none;
-        }
-
-        .results-section {
-            margin-top: 2rem;
-            padding-top: 2rem;
-            border-top: 1px solid var(--border-color);
-            text-align: left;
-        }
-
-        .result-card {
-            background-color: var(--primary-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1.25rem;
-            margin-bottom: 1rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .result-info h3 {
-            font-size: 1.1rem;
-            color: var(--text-main);
-            margin-bottom: 0.25rem;
-        }
-
-        .result-info p {
-            margin-bottom: 0;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        .btn-download {
-            background-color: white;
-            color: var(--accent-color);
-            border: 1px solid var(--accent-color);
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: 500;
-            font-size: 0.9rem;
-            transition: all 0.2s;
-        }
-
-        .btn-download:hover {
-            background-color: var(--accent-color);
-            color: white;
-        }
-
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 6px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
-        }
-
-        /* Loading Overlay Styles (Claude-like) */
-        #loadingOverlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(255, 255, 255, 0.7);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
-        .processing-card {
-            background: rgba(255, 255, 255, 0.95);
-            padding: 2.5rem;
-            border-radius: 16px;
-            box-shadow: 0 20px 40px -15px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.05);
-            width: 100%;
-            max-width: 420px;
-            text-align: left;
-            transform: translateY(20px);
-            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        .processing-card h3 {
-            font-size: 1.15rem;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            color: #0f172a;
-        }
-
-        .main-spinner {
-            width: 20px; height: 20px;
-            border: 2px solid #e2e8f0;
-            border-top-color: #3b82f6;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-
-        .step-container {
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-
-        .step {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            font-size: 0.95rem;
-            color: #64748b;
-            transition: all 0.3s ease;
-            opacity: 0.5;
-            transform: translateX(-5px);
-        }
-
-        .step.active {
-            opacity: 1;
-            color: #0f172a;
-            transform: translateX(0);
-        }
-
-        .step.completed {
-            opacity: 1;
-            color: #334155;
-            transform: translateX(0);
-        }
-
-        .step-icon-wrapper {
-            width: 24px;
-            height: 24px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-
-        .status-dot {
-            width: 6px; height: 6px;
-            background: #cbd5e1;
-            border-radius: 50%;
-            transition: all 0.3s ease;
-        }
-
-        .step-spinner {
-            width: 16px; height: 16px;
-            border: 2px solid #e2e8f0;
-            border-top-color: #3b82f6;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            display: none;
-        }
-
-        .check-icon {
-            color: #10b981;
-            display: none;
-            width: 18px; height: 18px;
-        }
-
-        .step.active .status-dot { display: none; }
-        .step.active .step-spinner { display: block; }
+        /* ── Claude-style Timeline ── */
+        .timeline-container { display: none; max-width: 600px; margin: 0 auto; padding-top: 1rem;}
+        .timeline-container.show { display: block; animation: fadeIn 0.4s ease; }
         
-        .step.completed .status-dot { display: none; }
-        .step.completed .step-spinner { display: none; }
-        .step.completed .check-icon { display: block; animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-        @keyframes popIn { 
-            0% { transform: scale(0.5); opacity: 0; }
-            100% { transform: scale(1); opacity: 1; }
+        .tl-header { margin-bottom: 2.5rem; }
+        .tl-header h3 { font-size: 1.25rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.4rem; }
+        .tl-header p { font-size: 0.95rem; color: var(--text-dim); }
+
+        .tl-list { display: flex; flex-direction: column; }
+
+        .cv-step {
+            display: none; /* hidden until activated */
+            position: relative;
+            padding-bottom: 28px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.4s ease;
         }
+        .cv-step.show {
+            display: flex;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .cv-step:last-child { padding-bottom: 0px; }
+        
+        .cv-icon-wrapper {
+            position: relative;
+            z-index: 2;
+            background: var(--bg-card);
+            width: 24px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 2px;
+            color: var(--text-dim);
+        }
+        
+        .cv-icon { width: 18px; height: 18px; color: #9ca3af; }
+        
+        .cv-line {
+            position: absolute;
+            left: 11.5px;
+            top: 24px;
+            bottom: -4px;
+            width: 1.5px;
+            background: #e5e7eb;
+            z-index: 1;
+        }
+        .cv-step:last-child .cv-line { display: none; }
+
+        .cv-content {
+            margin-left: 16px;
+            padding-top: 1px;
+            flex: 1;
+        }
+        
+        .cv-title {
+            font-size: 0.95rem;
+            font-weight: 400;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Status Colors & Icons */
+        .cv-step.active .cv-title { color: var(--blue); }
+        .cv-step.active .cv-icon { color: var(--blue); }
+        .cv-step.done .cv-icon { color: var(--text-dim); }
+        .cv-step.warn .cv-title { color: var(--orange); }
+        .cv-step.warn .cv-icon { color: var(--orange); }
+
+        .icon-spinner { animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        .status-badge {
+            font-size: 0.75rem;
+            background: var(--blue-bg);
+            color: var(--blue);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+
+        /* Action Buttons inside timeline */
+        .tl-actions {
+            display: none;
+            margin-top: 1rem;
+            gap: 0.75rem;
+        }
+        .tl-actions.show { display: flex; }
+        
+        .btn-sm {
+            padding: 0.6rem 1.25rem; border-radius: 6px; font-size: 0.85rem;
+            font-weight: 500; cursor: pointer; transition: all 0.2s; border: none;
+            font-family: inherit;
+        }
+        .btn-sm.gray { background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb;}
+        .btn-sm.gray:hover { background: #e5e7eb; }
+        .btn-sm.primary { background: var(--blue); color: #fff; }
+        .btn-sm.primary:hover { background: var(--blue-hover); }
+
+        /* ── Results View ── */
+        .results-container { max-width: 800px; margin: 0 auto; display: none; animation: fadeIn 0.4s ease;}
+        .results-container.show { display: block; }
+
+        .success-banner {
+            display: flex; align-items: flex-start; gap: 12px; padding: 1.25rem;
+            background: var(--success-bg); border: 1px solid #10b981; border-radius: 8px; margin-bottom: 2rem;
+        }
+        .success-banner svg { width: 24px; height: 24px; color: var(--success); flex-shrink: 0; margin-top: 2px;}
+        .success-banner h3 { font-size: 1rem; color: #065f46; margin-bottom: 0.25rem; font-weight: 600;}
+        .success-banner p { font-size: 0.9rem; color: #047857; margin: 0; line-height: 1.4;}
+
+        .res-section { margin-bottom: 2rem; }
+        .res-section h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--text-main);}
+        .res-section > p.sub { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 1rem; }
+        
+        .res-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+        .res-card {
+            padding: 1.25rem; border: 1px solid var(--border); border-radius: 8px;
+            background: #fff; display: flex; flex-direction: column; gap: 1rem;
+        }
+        .res-card .info h4 { font-size: 0.95rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.25rem;}
+        .res-card .info p { font-size: 0.85rem; color: var(--text-dim); }
+        .res-card .btn-dl { align-self: flex-start; }
+
+        .btn-dl {
+            padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.85rem; font-weight: 500;
+            text-decoration: none; border: 1px solid var(--blue-light); color: var(--blue);
+            background: var(--blue-bg); transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-dl:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+        .btn-dl svg { width: 16px; height: 16px; }
+        
+        .btn-dl.solid { background: var(--blue); color: #fff; border-color: var(--blue); }
+        .btn-dl.solid:hover { background: var(--blue-hover); }
+
+        .breakdown-toggle {
+            font-size: 0.85rem; color: var(--blue); background: none; border: none; 
+            cursor: pointer; font-weight: 500; font-family: inherit; display: inline-flex; align-items: center; gap: 4px; padding: 0.5rem 0;
+        }
+        .breakdown-toggle svg { width: 14px; height: 14px; transition: transform 0.2s; }
+        .breakdown-toggle.open svg { transform: rotate(180deg); }
+        .breakdown-content { display: none; margin-top: 1rem; }
+        .breakdown-content.show { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        
+        .data-box { background: var(--bg-page); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; }
+        .data-box h5 { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--text-main); }
+        .data-row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; color: var(--text-dim);}
+        .data-row:last-child { border: none; }
+        .data-count { font-weight: 600; color: var(--text-main); }
+        .scroll-area { max-height: 150px; overflow-y: auto; padding-right: 4px;}
+        .scroll-area::-webkit-scrollbar { width: 4px; }
+        .scroll-area::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
 </head>
 <body>
 
-    <!-- Claude-like Loading Overlay -->
-    <div id="loadingOverlay">
-        <div class="processing-card" id="processingCard">
-            <h3><div class="main-spinner"></div> Executing Data Pipeline</h3>
-            <div class="step-container">
-                <div class="step pending" id="step1">
-                    <div class="step-icon-wrapper">
-                        <div class="status-dot"></div>
-                        <div class="step-spinner"></div>
-                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                    </div>
-                    <span>Verifying Excel file constraints...</span>
-                </div>
-                <div class="step pending" id="step2">
-                    <div class="step-icon-wrapper">
-                        <div class="status-dot"></div>
-                        <div class="step-spinner"></div>
-                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                    </div>
-                    <span>Extracting FonePay & Nepal Pay tables...</span>
-                </div>
-                <div class="step pending" id="step3">
-                    <div class="step-icon-wrapper">
-                        <div class="status-dot"></div>
-                        <div class="step-spinner"></div>
-                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                    </div>
-                    <span>Querying Core Banking (CBS) Database...</span>
-                </div>
-                <div class="step pending" id="step4">
-                    <div class="step-icon-wrapper">
-                        <div class="status-dot"></div>
-                        <div class="step-spinner"></div>
-                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                    </div>
-                    <span>Patching missing categories mapping...</span>
-                </div>
-                <div class="step pending" id="step5">
-                    <div class="step-icon-wrapper">
-                        <div class="status-dot"></div>
-                        <div class="step-spinner"></div>
-                        <svg class="check-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
-                    </div>
-                    <span>Generating final aggregations...</span>
-                </div>
-            </div>
-        </div>
-    </div>
+<div class="topbar">
+    <div class="logo">JB</div>
+    <h1>Reporting Pipeline</h1>
+    <span class="tag">Internal Tool</span>
+</div>
 
-    <div class="container">
-        <div style="text-align: left; margin-bottom: 2rem;">
-            <h2 style="font-size: 1.5rem; color: var(--accent-color);">Step 0: Data Input</h2>
-            <p style="margin-bottom: 0;">Upload the latest merchant data file (.xlsx or .xls) to extract Fonepay and Nepal Pay records.</p>
-        </div>
+<div class="layout">
+    <!-- Left Sidebar -->
+    <div class="sidebar">
+        <h2>Upload Data</h2>
+        <p class="sub">Upload the consolidated Excel file containing FonePay and NepalPay sheets.</p>
         
-        {% if messages %}
-            <div class="messages">
+        <div class="msg-container">
+            {% if messages %}
                 {% for message in messages %}
-                    <div class="message {{ message.tags }}">
-                        {{ message }}
-                    </div>
+                <div class="msg {{ message.tags }}">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span>{{ message }}</span>
+                </div>
                 {% endfor %}
-            </div>
-        {% endif %}
+            {% endif %}
+        </div>
 
-        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+        <form id="uploadForm">
             {% csrf_token %}
-            <div class="upload-area" id="dropZone">
-                <svg class="upload-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                </svg>
-                <div class="upload-text">Click to browse or drag and drop</div>
-                <span class="upload-subtext">Supports .xlsx formats</span>
-                <input type="file" name="file" id="fileInput" accept=".xlsx, .xls" required>
+            <div class="drop-zone" id="dropZone">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                <div class="label">Click or drag file here</div>
+                <div class="hint">Accepts .xlsx or .xls</div>
+                <input type="file" name="file" id="fileInput" accept=".xlsx,.xls" required>
             </div>
             
-            <div class="file-name-display" id="fileNameDisplay"></div>
-            
-            <button type="submit" class="btn-submit">Process Data</button>
+            <div class="file-badge" id="fileBadge" style="display: none;">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <span id="fileNameTr">filename.xlsx</span>
+            </div>
+
+            <button type="submit" class="btn-go" id="goBtn">
+                Proceed
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+            </button>
         </form>
-
-        {% if fonepay_count is not none and nepalpay_count is not none %}
-        <div class="results-section">
-            <h2 style="font-size: 1.25rem;">Step 1: Unimportant Columns Removed</h2>
-            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left;">Filtered to keep only required fields.</p>
-            
-            <div class="result-card">
-                <div class="result-info">
-                    <h3>Fonepay Data (Step 1)</h3>
-                    <p>{{ fonepay_count }} records found</p>
-                </div>
-                <a href="{% url 'download_sheet' fonepay_filename %}" class="btn-download">Download</a>
-            </div>
-
-            <div class="result-card">
-                <div class="result-info">
-                    <h3>Nepal Pay Data (Step 1)</h3>
-                    <p>{{ nepalpay_count }} records found</p>
-                </div>
-                <a href="{% url 'download_sheet' nepalpay_filename %}" class="btn-download">Download</a>
-            </div>
-        </div>
-        
-        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem;">
-            <h2 style="font-size: 1.25rem;">Step 2: CBS Data Merged</h2>
-            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left;">Enriched with DB Address, Gender, Age, & Municipality.</p>
-            
-            <div class="result-card">
-                <div class="result-info">
-                    <h3>Fonepay Data (Step 2)</h3>
-                    <p>{{ fonepay_count }} enriched records</p>
-                </div>
-                <a href="{% url 'download_sheet' fonepay_step2_filename %}" class="btn-download">Download</a>
-            </div>
-
-            <div class="result-card">
-                <div class="result-info">
-                    <h3>Nepal Pay Data (Step 2)</h3>
-                    <p>{{ nepalpay_count }} enriched records</p>
-                </div>
-                <a href="{% url 'download_sheet' nepalpay_step2_filename %}" class="btn-download">Download</a>
-            </div>
-        </div>
-
-        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem;">
-            <h2 style="font-size: 1.25rem;">Data Category Filtration & Testing</h2>
-            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left;">Category breakdown for Province and District for separate providers (Step 2 Enriched Data).</p>
-            
-            <div style="display: flex; gap: 1rem; text-align: left; margin-bottom: 1.5rem;">
-                <!-- Fonepay Province Breakdown -->
-                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
-                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent-color);">Fonepay Provinces</h3>
-                    <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
-                        {% for prov, count in fonepay_provinces.items %}
-                            <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
-                                <span>{{ prov }}</span>
-                                <span style="font-weight: 600;">{{ count }}</span>
-                            </li>
-                        {% empty %}
-                            <li style="color: var(--text-muted);">No Province Data</li>
-                        {% endfor %}
-                    </ul>
-                </div>
-                <!-- Fonepay District Breakdown -->
-                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
-                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--accent-color);">Fonepay Districts</h3>
-                    <div style="max-height: 200px; overflow-y: auto; padding-right: 0.5rem;" class="custom-scrollbar">
-                        <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
-                            {% for dist, count in fonepay_districts.items %}
-                                <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
-                                    <span>{{ dist }}</span>
-                                    <span style="font-weight: 600;">{{ count }}</span>
-                                </li>
-                            {% empty %}
-                                <li style="color: var(--text-muted);">No District Data</li>
-                            {% endfor %}
-                        </ul>
-                    </div>
-                </div>
-            </div>
-
-            <div style="display: flex; gap: 1rem; text-align: left;">
-                <!-- Nepal Pay Province Breakdown -->
-                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
-                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #0284c7;">Nepal Pay Provinces</h3>
-                    <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
-                        {% for prov, count in nepalpay_provinces.items %}
-                            <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
-                                <span>{{ prov }}</span>
-                                <span style="font-weight: 600;">{{ count }}</span>
-                            </li>
-                        {% empty %}
-                            <li style="color: var(--text-muted);">No Province Data</li>
-                        {% endfor %}
-                    </ul>
-                </div>
-                <!-- Nepal Pay District Breakdown -->
-                <div style="flex: 1; min-width: 0; background-color: var(--primary-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem;">
-                    <h3 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: #0284c7;">Nepal Pay Districts</h3>
-                    <div style="max-height: 200px; overflow-y: auto; padding-right: 0.5rem;" class="custom-scrollbar">
-                        <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.85rem;">
-                            {% for dist, count in nepalpay_districts.items %}
-                                <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #e5e7eb; padding: 0.25rem 0;">
-                                    <span>{{ dist }}</span>
-                                    <span style="font-weight: 600;">{{ count }}</span>
-                                </li>
-                            {% empty %}
-                                <li style="color: var(--text-muted);">No District Data</li>
-                            {% endfor %}
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {% if action_required %}
-        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem; background-color: #fef2f2; border-radius: 8px; padding: 1.25rem; border: 1px solid #fecaca;">
-            <h2 style="font-size: 1.25rem; color: #991b1b;">⚠️ Action Required: Missing Data Detected</h2>
-            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left; color: #b91c1c;">
-                Some accounts are still missing Province, District, or Municipality data, even after checking the CBS database.
-            </p>
-            
-            <div style="display: flex; gap: 1rem; justify-content: flex-start;">
-                <a href="{% url 'finalize_report' unique_id %}" class="btn-submit" style="background-color: #6b7280; text-decoration: none; display: inline-block; width: auto; padding: 0.75rem 1.5rem; margin-top: 0; text-align: center;">Proceed Anyway (Keep Nulls)</a>
-                <a href="{% url 'review_missing_data' unique_id %}" class="btn-submit" style="background-color: #dc2626; text-decoration: none; display: inline-block; width: auto; padding: 0.75rem 1.5rem; margin-top: 0; text-align: center;">Manually Update Missing Data</a>
-            </div>
-        </div>
-        {% elif step3_filename %}
-        <div class="results-section" style="margin-top: 1.5rem; padding-top: 1.5rem; background-color: #f8fafc; border-radius: 8px; padding: 1.25rem;">
-            <h2 style="font-size: 1.25rem; color: #0369a1;">Step 3: Final Report Generation</h2>
-            <p style="margin-bottom: 1rem; font-size: 0.85rem; text-align: left;">Aggregated data according to Province, Local Level, District, and Gender.</p>
-            
-            <div class="result-card" style="border-color: #bae6fd;">
-                <div class="result-info">
-                    <h3 style="color: #0f172a;">Additional Payment Report ASCII</h3>
-                    <p>4 Sheets containing final formatted aggregation</p>
-                </div>
-                <a href="{% url 'download_sheet' step3_filename %}" class="btn-download" style="background-color: #0284c7; color: white; border: none;">Download Report</a>
-            </div>
-        </div>
-        {% endif %}
-        
-        {% endif %}
     </div>
 
-    <script>
-        const fileInput = document.getElementById('fileInput');
-        const dropZone = document.getElementById('dropZone');
-        const fileNameDisplay = document.getElementById('fileNameDisplay');
+    <!-- Right Main Area -->
+    <div class="main">
+        <!-- Idle State -->
+        <div class="main-idle" id="idleState" {% if fonepay_count is not none %}style="display:none;"{% endif %}>
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+            <p>No task in progress</p>
+            <div class="hint">Your reporting workflow history will appear here once processing begins.</div>
+        </div>
 
-        // Handle file selection
-        fileInput.addEventListener('change', function() {
-            if (this.files && this.files.length > 0) {
-                fileNameDisplay.textContent = 'Selected: ' + this.files[0].name;
-                fileNameDisplay.style.display = 'block';
-            } else {
-                fileNameDisplay.style.display = 'none';
-            }
-        });
-
-        // Drag and drop effects
-        dropZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropZone.classList.add('dragover');
-        });
-
-        dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('dragover');
-        });
-
-        dropZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropZone.classList.remove('dragover');
+        <!-- Claude-style Timeline -->
+        <div class="timeline-container" id="timelineContainer">
+            <div class="tl-header">
+                <h3>Processing Agent</h3>
+                <p id="timelineSub">Executing automated reporting pipeline...</p>
+            </div>
             
-            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                fileInput.files = e.dataTransfer.files;
-                fileNameDisplay.textContent = 'Selected: ' + e.dataTransfer.files[0].name;
-                fileNameDisplay.style.display = 'block';
+            <div class="tl-list" id="tlList">
+                <!-- Steps generated here via JS -->
+            </div>
+        </div>
+
+        <!-- Results View -->
+        {% if fonepay_count is not none and nepalpay_count is not none %}
+        <div class="results-container show">
+            {% if success %}
+            <div class="success-banner">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <div>
+                    <h3>Pipeline Completed Successfully</h3>
+                    <p>All merchant records have been processed, enriched with Core Banking System data, and compiled into the final report formats below.</p>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Final Report -->
+            {% if step3_filename %}
+            <div class="res-section">
+                <h2>Final Aggregated Report</h2>
+                <p class="sub">Complete report mapped by Province, District, Local Level, and Gender.</p>
+                <div class="res-grid" style="grid-template-columns: 1fr;">
+                    <div class="res-card" style="border-color: #10b981; background: #f8fafc;">
+                        <div class="info">
+                            <h4>Additional Payment Report.xlsx</h4>
+                            <p>Contains 4 formatted sheets compliant with formatting requirements.</p>
+                        </div>
+                        <a href="{% url 'download_sheet' step3_filename %}" class="btn-dl solid">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                            Download Final Report
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Intermediary Files -->
+            <div class="res-section" style="margin-top: 3rem;">
+                <h2>Raw Extracted Data (Step 1)</h2>
+                <div class="res-grid">
+                    <div class="res-card">
+                        <div class="info">
+                            <h4>Fonepay Data</h4><p>{{ fonepay_count }} valid records</p>
+                        </div>
+                        <a href="{% url 'download_sheet' fonepay_filename %}" class="btn-dl">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
+                        </a>
+                    </div>
+                    <div class="res-card">
+                        <div class="info">
+                            <h4>Nepal Pay Data</h4><p>{{ nepalpay_count }} valid records</p>
+                        </div>
+                        <a href="{% url 'download_sheet' nepalpay_filename %}" class="btn-dl">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="res-section">
+                <h2>CBS Enriched Data (Step 2)</h2>
+                <div class="res-grid">
+                    <div class="res-card">
+                        <div class="info">
+                            <h4>Fonepay Enriched</h4><p>Address, Gender, Age attached</p>
+                        </div>
+                        <a href="{% url 'download_sheet' fonepay_step2_filename %}" class="btn-dl">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
+                        </a>
+                    </div>
+                    <div class="res-card">
+                        <div class="info">
+                            <h4>Nepal Pay Enriched</h4><p>Address, Gender, Age attached</p>
+                        </div>
+                        <a href="{% url 'download_sheet' nepalpay_step2_filename %}" class="btn-dl">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
+                        </a>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    // --- File Input UI ---
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+    const fileBadge = document.getElementById('fileBadge');
+    const fileNameTr = document.getElementById('fileNameTr');
+    
+    if (fileInput) {
+        fileInput.addEventListener('change', function() {
+            if (this.files.length) { 
+                fileNameTr.textContent = this.files[0].name; 
+                fileBadge.style.display = 'flex'; 
+                dropZone.style.display = 'none';
             }
         });
+    }
+    if (dropZone) {
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', e => {
+            e.preventDefault(); dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) { 
+                fileInput.files = e.dataTransfer.files; 
+                fileNameTr.textContent = e.dataTransfer.files[0].name; 
+                fileBadge.style.display = 'flex';
+                dropZone.style.display = 'none';
+            }
+        });
+    }
 
-        // Form Submission - Loader Logic
-        const uploadForm = document.getElementById('uploadForm');
-        uploadForm.addEventListener('submit', function(e) {
-            if (fileInput.files.length > 0) {
-                const overlay = document.getElementById('loadingOverlay');
-                const card = document.getElementById('processingCard');
+    // --- Claude-style Timeline Setup ---
+    const iconDoc = `<svg class="cv-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`;
+    const iconSpinner = `<svg class="cv-icon icon-spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
+    const iconCheck = `<svg class="cv-icon" fill="none" stroke="var(--success)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`;
+    const iconWarn = `<svg class="cv-icon" fill="none" stroke="var(--orange)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`;
+
+    const stepLabels = [
+        "Reading Excel workbook to understand structure",
+        "Filtering required columns for Fonepay & Nepal Pay",
+        "Querying Core Banking System for account details",
+        "Enriching merchant records with CBS data",
+        "Validating geographical data completeness",
+        "Compiling final regulatory report formats"
+    ];
+
+    const tlList = document.getElementById('tlList');
+    
+    function createStepHTML(id, label, isLast) {
+        return `
+        <div class="cv-step" id="step-${id}">
+            <div class="cv-icon-wrapper" id="iconWrap-${id}">
+                ${iconDoc}
+            </div>
+            ${!isLast ? '<div class="cv-line"></div>' : ''}
+            <div class="cv-content">
+                <div class="cv-title" id="title-${id}">${label}</div>
+                <div class="cv-log" id="log-${id}" style="display: none; margin-top: 6px; font-size: 0.8rem; color: var(--text-dim); background: #f8fafc; padding: 6px 10px; border-left: 2px solid var(--border); border-radius: 0 4px 4px 0; font-family: monospace;"></div>
+                ${id === 5 ? `
+                <div class="tl-actions" id="actionBtns">
+                    <button class="btn-sm primary" id="btnProceed">Proceed without data</button>
+                    <button class="btn-sm gray" id="btnResolve">Resolve manually</button>
+                </div>` : ''}
+            </div>
+        </div>`;
+    }
+
+    function initTimeline() {
+        tlList.innerHTML = '';
+        for(let i=1; i<=6; i++) {
+            tlList.innerHTML += createStepHTML(i, stepLabels[i-1], i===6);
+        }
+    }
+
+    // --- Processing API logic ---
+    const form = document.getElementById('uploadForm');
+    const goBtn = document.getElementById('goBtn');
+    let uid = null, pollTimer = null;
+
+    if (form) {
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (!fileInput.files.length) { alert('Please select a file.'); return; }
+            
+            goBtn.disabled = true; 
+            goBtn.innerHTML = `<svg class="icon-spinner" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Starting...`;
+
+            document.getElementById('idleState').style.display = 'none';
+            document.getElementById('timelineContainer').classList.add('show');
+            
+            const results = document.querySelector('.results-container');
+            if(results) results.classList.remove('show');
+            
+            initTimeline();
+
+            const fd = new FormData();
+            fd.append('file', fileInput.files[0]);
+            fd.append('csrfmiddlewaretoken', form.querySelector('[name=csrfmiddlewaretoken]').value);
+
+            fetch('/api/start/', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) { alert(data.error); goBtn.disabled = false; goBtn.innerHTML = 'Proceed'; return; }
+                uid = data.unique_id;
+                pollTimer = setInterval(pollProgress, 600);
+            })
+            .catch(err => { alert('Failed: ' + err); goBtn.disabled = false; goBtn.innerHTML = 'Proceed'; });
+        });
+    }
+
+    function pollProgress() {
+        fetch('/api/progress/' + uid + '/')
+        .then(r => r.json())
+        .then(handleData)
+        .catch(e => console.error(e));
+    }
+
+    function setStepState(num, state, logText) {
+        const step = document.getElementById(`step-${num}`);
+        const wrap = document.getElementById(`iconWrap-${num}`);
+        const title = document.getElementById(`title-${num}`);
+        const logBox = document.getElementById(`log-${num}`);
+        if(!step) return;
+
+        step.classList.add('show');
+        step.className = `cv-step show ${state}`;
+        
+        if (logText) {
+            logBox.style.display = 'block';
+            logBox.textContent = logText;
+        }
+
+        if(state === 'active') {
+            wrap.innerHTML = iconSpinner;
+            if(!title.innerHTML.includes('badge')) title.innerHTML += `<span class="status-badge icon-spinner" style="border-radius:50%; width:10px; height:10px; padding:0; display:inline-block; margin-left:6px; background:var(--blue);"></span>`;
+        } else if (state === 'done') {
+            wrap.innerHTML = num === 6 ? iconCheck : iconDoc; // use doc icon for history, check for final
+            if(num < 6) wrap.innerHTML = iconDoc; // clean file icon for completed reading steps
+            title.innerHTML = stepLabels[num-1]; // remove badge
+        } else if (state === 'warn') {
+            wrap.innerHTML = iconWarn;
+            title.innerHTML = stepLabels[num-1] + `<span class="status-badge" style="background:var(--warn-bg); color:var(--orange);">Action Required</span>`;
+        }
+    }
+
+    function handleData(d) {
+        const step = d.step, status = d.status, logText = d.log;
+
+        // Mark previous steps done
+        for (let i = 1; i < step; i++) {
+            // Keep existing log text if it's already there, we don't clear it
+            setStepState(i, 'done');
+        }
+
+        if (status === 'active') {
+            setStepState(step, 'active', logText);
+        }
+        else if (status === 'action_required') {
+            clearInterval(pollTimer);
+            setStepState(5, 'warn', logText);
+            document.getElementById('actionBtns').classList.add('show');
+            document.getElementById('timelineSub').textContent = 'Waiting for user input.';
+            
+            document.getElementById('btnProceed').onclick = function() {
+                // User said "proceed" -> continue
+                document.getElementById('actionBtns').classList.remove('show');
+                setStepState(5, 'done', 'Ignored missing data. Proceeding...');
+                document.getElementById('timelineSub').textContent = 'Executing automated reporting pipeline...';
                 
-                // Show Overlay
-                overlay.style.display = 'flex';
-                // Trigger reflow to start transition
-                void overlay.offsetWidth; 
-                overlay.style.opacity = '1';
-                card.style.transform = 'translateY(0)';
-
-                const totalSteps = 5;
-                // Realistic staggered wait times in milliseconds
-                const simulatedDelays = [400, 1100, 1800, 2500, 2900];
-
-                function activateStep(n) {
-                    if(n > 1) {
-                        const prev = document.getElementById('step' + (n-1));
-                        if(prev) {
-                            prev.classList.remove('active');
-                            prev.classList.add('completed');
-                        }
-                    }
-                    if(n <= totalSteps) {
-                        const current = document.getElementById('step' + n);
-                        if(current) {
-                            current.classList.remove('pending');
-                            current.classList.add('active');
-                        }
-                    }
-                }
-
-                activateStep(1);
-                simulatedDelays.forEach((delay, idx) => {
-                    setTimeout(() => {
-                        activateStep(idx + 2); // Start applying next steps
-                    }, delay);
-                });
-            }
-        });
-    </script>
+                setTimeout(() => {
+                    setStepState(6, 'active');
+                    fetch('/api/finalize/' + uid + '/').then(r=>r.json()).then(res => {
+                        if(res.status === 'complete') {
+                            setStepState(6, 'done', res.log || 'Aggregated all data successfully.');
+                            setTimeout(() => { window.location.href = '/finalize/' + uid + '/'; }, 1000);
+                        } else alert('Error: ' + res.detail);
+                    });
+                }, 500);
+            };
+            document.getElementById('btnResolve').onclick = () => window.location.href = '/review/' + uid + '/';
+        }
+        else if (status === 'complete') {
+            clearInterval(pollTimer);
+            for (let i = 1; i <= 6; i++) setStepState(i, 'done');
+            document.getElementById(`iconWrap-6`).innerHTML = iconCheck; // Last step checkmark
+            document.getElementById('timelineSub').textContent = 'Done.';
+            setTimeout(() => { window.location.href = '/finalize/' + uid + '/'; }, 800);
+        }
+        else if (status === 'error') {
+            clearInterval(pollTimer);
+            alert('Error: ' + d.detail);
+            goBtn.disabled = false; goBtn.innerHTML = 'Proceed';
+        }
+    }
+</script>
 </body>
 </html>

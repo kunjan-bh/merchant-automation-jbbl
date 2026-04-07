@@ -1,12 +1,15 @@
 from django.shortcuts import render, redirect
 from django.contrib import messages
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, JsonResponse
 from django.conf import settings
 from django.urls import reverse
+from django.db import connection
 import pandas as pd
 import os
 import uuid
 import random
+import json
+import threading
 from .models import CBSMerchant
 
 # --- HELPER FUNCTIONS ---
@@ -29,7 +32,6 @@ def find_account_col(df):
     return None
 
 def find_col_by_norm(df, norm_name):
-    """Find column in dataframe by normalized name (case/space/underscore insensitive)."""
     for col in df.columns:
         if str(col).lower().replace(' ', '').replace('_', '') == norm_name:
             return col
@@ -38,7 +40,6 @@ def find_col_by_norm(df, norm_name):
 def get_fill_col(acc_col_name, cbs_lookup):
     def fill_col(r, col_name, cbs_col=None):
         if not cbs_col: cbs_col = col_name
-        # Case-insensitive column lookup in the row
         val = None
         for key in r.index:
             if str(key).lower().replace(' ', '').replace('_', '') == col_name.lower():
@@ -54,7 +55,7 @@ def get_fill_col(acc_col_name, cbs_lookup):
 
 def check_missing_records(df, required_cols, index_col):
     missing_dict = {}
-    if df is None or df.empty or not index_col or index_col not in df.columns:
+    if df is None or df.empty or not index_col:
         return missing_dict
     for _, row in df.iterrows():
         acc = str(row.get(index_col)).strip()
@@ -122,23 +123,42 @@ def map_gender(g):
 
 def get_prov_counts(df):
     counts = {p: 0 for p in provinces_list}
-    if df is not None and not df.empty and 'province' in df.columns:
-        mapped = df['province'].apply(map_province)
-        for k, v in mapped.value_counts().items():
-            if k in counts: 
-                counts[k] += v
-            elif k != 'Unmatched': 
-                counts[k] = v
+    if df is not None and not df.empty:
+        col = find_col_by_norm(df, 'province')
+        if col:
+            mapped = df[col].apply(map_province)
+            for k, v in mapped.value_counts().items():
+                if k in counts: 
+                    counts[k] += v
+                elif k != 'Unmatched': 
+                    counts[k] = v
     return counts
 
 def get_dist_counts(df):
-    if df is not None and not df.empty and 'district' in df.columns:
-        mapped = df['district'].apply(map_district)
-        counts = mapped.value_counts().to_dict()
-        if 'Unmatched' in counts:
-            del counts['Unmatched']
-        return counts
+    if df is not None and not df.empty:
+        col = find_col_by_norm(df, 'district')
+        if col:
+            mapped = df[col].apply(map_district)
+            counts = mapped.value_counts().to_dict()
+            if 'Unmatched' in counts:
+                del counts['Unmatched']
+            return counts
     return {}
+
+# --- PROGRESS TRACKING ---
+
+def _progress_path(uid):
+    d = os.path.join(settings.BASE_DIR, 'media', 'outputs')
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f'progress_{uid}.json')
+
+def _set_progress(uid, step, status, detail='', extra=None):
+    data = {'step': step, 'status': status, 'detail': detail}
+    if extra:
+        data.update(extra)
+    path = _progress_path(uid)
+    with open(path, 'w') as f:
+        json.dump(data, f)
 
 # --- BUSINESS LOGIC ---
 
@@ -147,14 +167,12 @@ def generate_mock_data(all_accounts, nepalpay_accs=None, source_null_province=No
     if source_null_province is None: source_null_province = set()
     if source_null_district is None: source_null_district = set()
     
-    # Delete old mock data and regenerate fresh for this upload
     CBSMerchant.objects.filter(account_number__in=all_accounts).delete()
     
     mock_municipality_options = ["Kathmandu MC", "Lalitpur SMC", "Byans RM", "Bharatpur MC", "Hetauda SMC", "Birendranagar M", "Pokhara MC"]
     
     mock_merchants = []
     for acc in all_accounts:
-        # Mirror source NULLs: if source has NULL province/district, CBS should too
         muni = "" if acc in nepalpay_accs else random.choice(mock_municipality_options)
         prov = "" if acc in source_null_province else random.choice(provinces_list)
         dist = "" if acc in source_null_district else random.choice(districts_list)
@@ -174,9 +192,14 @@ def generate_mock_data(all_accounts, nepalpay_accs=None, source_null_province=No
     if mock_merchants:
         CBSMerchant.objects.bulk_create(mock_merchants)
 
-def perform_step1_and_2(file, unique_id):
-    fonepay_df = pd.read_excel(file, sheet_name='fonepay')
-    nepalpay_df = pd.read_excel(file, sheet_name='nepalpay')
+def perform_step1_and_2(file_or_path, unique_id, uid=None):
+    """Core pipeline. Accepts file object or path. If uid is provided, tracks progress."""
+    if uid: _set_progress(uid, 1, 'active', 'Reading Excel workbook...')
+    
+    fonepay_df = pd.read_excel(file_or_path, sheet_name='fonepay')
+    nepalpay_df = pd.read_excel(file_or_path, sheet_name='nepalpay')
+    
+    if uid: _set_progress(uid, 2, 'active', f'Filtering columns — {len(fonepay_df):,} FonePay + {len(nepalpay_df):,} NepalPay records')
     
     fonepay_requested = ['merchantid', 'accountnumber', 'province', 'district', 'municipality', 'amount', 'tax', 'taxes', 'count']
     nepalpay_requested = ['province', 'district', 'accountnumber', 'merchantcode']
@@ -196,8 +219,6 @@ def perform_step1_and_2(file, unique_id):
         
     all_accounts = fonepay_accs | nepalpay_accs
     
-    # Identify accounts with NULL province/district in the SOURCE data
-    # so mock CBS mirrors those NULLs (won't fabricate random values)
     source_null_province = set()
     source_null_district = set()
     
@@ -224,6 +245,8 @@ def perform_step1_and_2(file, unique_id):
             if np_dist_col and is_empty(row.get(np_dist_col)):
                 source_null_district.add(acc)
     
+    if uid: _set_progress(uid, 3, 'active', f'Querying CBS for {len(all_accounts):,} merchant accounts...')
+    
     generate_mock_data(all_accounts, nepalpay_accs, source_null_province, source_null_district)
     
     all_cbs_data = pd.DataFrame(list(CBSMerchant.objects.filter(account_number__in=all_accounts).values(
@@ -231,6 +254,10 @@ def perform_step1_and_2(file, unique_id):
     )))
     
     cbs_lookup = all_cbs_data.set_index('account_number') if not all_cbs_data.empty else pd.DataFrame()
+
+    if uid: 
+        _set_progress(uid, 3, 'active', f'Querying CBS for {len(all_accounts):,} merchant accounts...', extra={'log': f'Found {len(all_cbs_data)} matches in Core Banking System.'})
+        _set_progress(uid, 4, 'active', 'Enriching records with CBS data...')
 
     fonepay_step2_df = fonepay_df.copy()
     nepalpay_step2_df = nepalpay_df.copy()
@@ -257,7 +284,6 @@ def perform_step1_and_2(file, unique_id):
         nepalpay_step2_df['province'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'province'), axis=1)
         nepalpay_step2_df['district'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'district'), axis=1)
         
-        # Pull Municipality from CBS if empty
         nepalpay_step2_df['municipality'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'municipality'), axis=1)
         
         nepalpay_step2_df['gender'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'gender'), axis=1)
@@ -278,134 +304,46 @@ def perform_step1_and_2(file, unique_id):
     fonepay_step2_df.to_excel(f_path2, index=False)
     nepalpay_step2_df.to_excel(n_path2, index=False)
     
-    return fonepay_df, nepalpay_df, fonepay_step2_df, nepalpay_step2_df
+    def count_missing(df, cols):
+        if df is None or df.empty: return {c: 0 for c in cols}
+        counts = {}
+        for c in cols:
+            found = False
+            for col in df.columns:
+                if str(col).lower().replace(' ', '').replace('_', '') == c:
+                    counts[c] = int(df[col].apply(lambda x: 1 if is_empty(x) else 0).sum())
+                    found = True; break
+            if not found: counts[c] = len(df)
+        return counts
 
-# --- VIEWS ---
-
-def upload_merchant_data(request):
-    if request.method == 'POST':
-        if 'file' not in request.FILES:
-            messages.error(request, 'No file was uploaded.')
-            return render(request, 'merchant/upload.html')
-            
-        file = request.FILES['file']
-        if not file.name.endswith(('.xlsx', '.xls')):
-            messages.error(request, 'Please upload a valid Excel file (.xlsx or .xls).')
-            return render(request, 'merchant/upload.html')
-            
-        try:
-            unique_id = str(uuid.uuid4())[:8]
-            f_df, n_df, f_step2, n_step2 = perform_step1_and_2(file, unique_id)
-            
-            fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
-            np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
-            
-            has_missing = bool(fp_missing or np_missing)
-            
-            if has_missing:
-                # Need manual intervention
-                context = {
-                    'unique_id': unique_id,
-                    'action_required': True,
-                    'fonepay_count': len(f_df),
-                    'nepalpay_count': len(n_df),
-                    'fonepay_filename': f'step1_fonepay_{unique_id}.xlsx',
-                    'nepalpay_filename': f'step1_nepalpay_{unique_id}.xlsx',
-                    'fonepay_step2_filename': f'step2_fonepay_{unique_id}.xlsx',
-                    'nepalpay_step2_filename': f'step2_nepalpay_{unique_id}.xlsx',
-                }
-                return render(request, 'merchant/upload.html', context)
-            else:
-                # Straight to final report
-                return redirect('finalize_report', unique_id=unique_id)
-                
-        except ValueError as e:
-            messages.error(request, f'Error reading sheets: {str(e)}')
-        except Exception as e:
-            messages.error(request, f'An unexpected error occurred: {str(e)}')
-            
-    return render(request, 'merchant/upload.html')
-
-def review_missing_data(request, unique_id):
-    f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
-    n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+    track_cols = ['province', 'district', 'municipality', 'gender', 'age', 'address1', 'address2']
+    b_f = count_missing(fonepay_df, track_cols)
+    b_n = count_missing(nepalpay_df, track_cols)
+    a_f = count_missing(fonepay_step2_df, track_cols)
+    a_n = count_missing(nepalpay_step2_df, track_cols)
     
-    if not os.path.exists(f_path2) or not os.path.exists(n_path2):
-        raise Http404("Processed Data Files not found. They might have been deleted.")
-        
-    f_step2 = pd.read_excel(f_path2, dtype=str)
-    n_step2 = pd.read_excel(n_path2, dtype=str)
+    stats = {}
+    for c in track_cols:
+        before = b_f.get(c, 0) + b_n.get(c, 0)
+        after = a_f.get(c, 0) + a_n.get(c, 0)
+        stats[c] = {'missing_before': before, 'missing_after': after, 'filled': before - after}
     
-    fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
-    np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
-    
-    all_missing = []
-    for acc, data in fp_missing.items():
-        data['platform'] = 'FonePay'
-        all_missing.append(data)
-    for acc, data in np_missing.items():
-        if acc not in fp_missing:
-            data['platform'] = 'Nepal Pay'
-            all_missing.append(data)
-            
-    return render(request, 'merchant/review_missing_data.html', {
-        'unique_id': unique_id,
-        'missing_records': all_missing,
-        'provinces_list': provinces_list,
-        'districts_list': districts_list,
-    })
+    if uid:
+        log_parts = []
+        for c, s in stats.items():
+            if s['filled'] > 0: log_parts.append(f"{c.title()}: filled {s['filled']}")
+        log_msg = " • ".join(log_parts) if log_parts else "No missing data filled from CBS."
+        _set_progress(uid, 4, 'active', f'Enriched records from CBS database.', extra={'log': log_msg})
 
-def apply_manual_mapping(request, unique_id):
-    if request.method == 'POST':
-        f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
-        n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
-        
-        f_step2 = pd.read_excel(f_path2)
-        n_step2 = pd.read_excel(n_path2)
-        
-        f_acc_col = find_account_col(f_step2)
-        n_acc_col = find_account_col(n_step2)
-        
-        updates = {}
-        for key, val in request.POST.items():
-            if val and str(val).strip() and val != 'Ignore':
-                parts = key.split('_', 1)
-                if len(parts) == 2 and parts[0] in ['prov', 'dist', 'muni']:
-                    col_map = {'prov': 'province', 'dist': 'district', 'muni': 'municipality'}
-                    col = col_map[parts[0]]
-                    acc = parts[1]
-                    if acc not in updates: updates[acc] = {}
-                    updates[acc][col] = str(val).strip()
-                    
-        def patch_df(df, acc_col):
-            if not acc_col or df.empty: return df
-            for idx, r in df.iterrows():
-                acc = str(r.get(acc_col)).strip()
-                if acc in updates:
-                    for col, new_val in updates[acc].items():
-                        if col in df.columns and is_empty(r.get(col)):
-                            df.at[idx, col] = new_val
-            return df
-            
-        f_step2 = patch_df(f_step2, f_acc_col)
-        n_step2 = patch_df(n_step2, n_acc_col)
-        
-        f_step2.to_excel(f_path2, index=False)
-        n_step2.to_excel(n_path2, index=False)
-        
-        messages.success(request, 'Successfully applied manual data mappings!')
-        return redirect('finalize_report', unique_id=unique_id)
-    return redirect('upload_merchant_data')
+    return fonepay_df, nepalpay_df, fonepay_step2_df, nepalpay_step2_df, stats
 
-def finalize_report(request, unique_id):
+def _generate_final_report(unique_id):
+    """Core report generation logic. Returns dict with result info."""
     f_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_fonepay_{unique_id}.xlsx')
     n_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_nepalpay_{unique_id}.xlsx')
     f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
     n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
     
-    if not all(os.path.exists(p) for p in [f_path2, n_path2]):
-        raise Http404("Processed Step 2 files missing.")
-        
     f_step2 = pd.read_excel(f_path2)
     n_step2 = pd.read_excel(n_path2)
     f_acc_col = find_account_col(f_step2)
@@ -498,6 +436,204 @@ def finalize_report(request, unique_id):
     f_df_len = len(pd.read_excel(f_path1)) if os.path.exists(f_path1) else len(f_step2)
     n_df_len = len(pd.read_excel(n_path1)) if os.path.exists(n_path1) else len(n_step2)
 
+    return {
+        'step3_filename': step3_filename,
+        'fonepay_count': f_df_len,
+        'nepalpay_count': n_df_len,
+        'fonepay_provinces': get_prov_counts(f_step2),
+        'fonepay_districts': get_dist_counts(f_step2),
+        'nepalpay_provinces': get_prov_counts(n_step2),
+        'nepalpay_districts': get_dist_counts(n_step2),
+        'fonepay_step1_provinces': get_prov_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
+        'fonepay_step1_districts': get_dist_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
+        'nepalpay_step1_provinces': get_prov_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
+        'nepalpay_step1_districts': get_dist_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
+    }
+
+
+# --- BACKGROUND PIPELINE ---
+
+def _run_pipeline(file_path, uid):
+    """Background thread: runs the full data pipeline with progress tracking."""
+    try:
+        f_df, n_df, f_step2, n_step2, stats = perform_step1_and_2(file_path, uid, uid=uid)
+        
+        _set_progress(uid, 5, 'active', 'Validating geographical data completeness...')
+        
+        fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
+        np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
+        
+        has_missing = bool(fp_missing or np_missing)
+        total_missing = len(fp_missing) + len(np_missing)
+        
+        result_info = {
+            'unique_id': uid,
+            'fonepay_count': len(f_df),
+            'nepalpay_count': len(n_df),
+        }
+        
+        if has_missing:
+            _set_progress(uid, 5, 'action_required', f'Found {total_missing} records still missing geographical data', extra={**result_info, 'log': f'Unable to resolve Province/District/Municipality for {total_missing} accounts via CBS.'})
+        else:
+            _set_progress(uid, 6, 'active', 'Generating final regulatory report formats...')
+            report = _generate_final_report(uid)
+            result_info['step3_filename'] = report['step3_filename']
+            _set_progress(uid, 6, 'complete', 'Report compiled successfully', extra={**result_info, 'log': 'Aggregated Province, District, Local Level, and Gender into 4 sheets.'})
+    except Exception as e:
+        _set_progress(uid, -1, 'error', str(e))
+    finally:
+        connection.close()
+
+
+# --- VIEWS ---
+
+def upload_merchant_data(request):
+    """Serves the upload page. Processing is handled via API."""
+    return render(request, 'merchant/upload.html')
+
+
+# --- API VIEWS ---
+
+def api_start(request):
+    """Accept file, start background pipeline, return unique_id."""
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+    
+    file = request.FILES.get('file')
+    if not file or not file.name.endswith(('.xlsx', '.xls')):
+        return JsonResponse({'error': 'Please upload a valid Excel file (.xlsx or .xls)'}, status=400)
+    
+    uid = str(uuid.uuid4())[:8]
+    tmp_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_path = os.path.join(tmp_dir, f'upload_{uid}.xlsx')
+    
+    with open(tmp_path, 'wb') as f:
+        for chunk in file.chunks():
+            f.write(chunk)
+    
+    _set_progress(uid, 0, 'started', 'Pipeline initiated')
+    
+    t = threading.Thread(target=_run_pipeline, args=(tmp_path, uid), daemon=True)
+    t.start()
+    
+    return JsonResponse({'unique_id': uid})
+
+def api_progress(request, unique_id):
+    """Return current pipeline progress as JSON."""
+    path = _progress_path(unique_id)
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return JsonResponse(json.load(f))
+    return JsonResponse({'step': 0, 'status': 'waiting', 'detail': 'Initializing...'})
+
+def api_finalize(request, unique_id):
+    """Called when user clicks 'Proceed' — generates the final report."""
+    try:
+        _set_progress(unique_id, 6, 'active', 'Generating final report...')
+        report = _generate_final_report(unique_id)
+        _set_progress(unique_id, 6, 'complete', 'Report compiled successfully', extra={
+            'unique_id': unique_id,
+            'step3_filename': report['step3_filename'],
+        })
+        return JsonResponse({'status': 'complete', 'step3_filename': report['step3_filename']})
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'detail': str(e)}, status=500)
+
+
+# --- LEGACY VIEWS (review, apply, finalize page, download) ---
+
+def review_missing_data(request, unique_id):
+    f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
+    n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+    
+    if not os.path.exists(f_path2) or not os.path.exists(n_path2):
+        raise Http404("Processed Data Files not found. They might have been deleted.")
+        
+    f_step2 = pd.read_excel(f_path2, dtype=str)
+    n_step2 = pd.read_excel(n_path2, dtype=str)
+    
+    fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
+    np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
+    
+    all_missing = []
+    for acc, data in fp_missing.items():
+        data['platform'] = 'FonePay'
+        all_missing.append(data)
+    for acc, data in np_missing.items():
+        if acc not in fp_missing:
+            data['platform'] = 'Nepal Pay'
+            all_missing.append(data)
+            
+    return render(request, 'merchant/review_missing_data.html', {
+        'unique_id': unique_id,
+        'missing_records': all_missing,
+        'provinces_list': provinces_list,
+        'districts_list': districts_list,
+    })
+
+def apply_manual_mapping(request, unique_id):
+    if request.method == 'POST':
+        f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
+        n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+        
+        f_step2 = pd.read_excel(f_path2)
+        n_step2 = pd.read_excel(n_path2)
+        
+        f_acc_col = find_account_col(f_step2)
+        n_acc_col = find_account_col(n_step2)
+        
+        updates = {}
+        for key, val in request.POST.items():
+            if val and str(val).strip() and val != 'Ignore':
+                parts = key.split('_', 1)
+                if len(parts) == 2 and parts[0] in ['prov', 'dist', 'muni']:
+                    col_map = {'prov': 'province', 'dist': 'district', 'muni': 'municipality'}
+                    col = col_map[parts[0]]
+                    acc = parts[1]
+                    if acc not in updates: updates[acc] = {}
+                    updates[acc][col] = str(val).strip()
+                    
+        def patch_df(df, acc_col):
+            if not acc_col or df.empty: return df
+            for idx, r in df.iterrows():
+                acc = str(r.get(acc_col)).strip()
+                if acc in updates:
+                    for col, new_val in updates[acc].items():
+                        if col in df.columns and is_empty(r.get(col)):
+                            df.at[idx, col] = new_val
+            return df
+            
+        f_step2 = patch_df(f_step2, f_acc_col)
+        n_step2 = patch_df(n_step2, n_acc_col)
+        
+        f_step2.to_excel(f_path2, index=False)
+        n_step2.to_excel(n_path2, index=False)
+        
+        messages.success(request, 'Successfully applied manual data mappings!')
+        return redirect('finalize_report', unique_id=unique_id)
+    return redirect('upload_merchant_data')
+
+def finalize_report(request, unique_id):
+    """Renders the full results page. Generates report if not already created."""
+    step3_filename = f'Additional_Payment_Report_ASCII_{unique_id}.xlsx'
+    step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
+    
+    # Only generate if not already done (e.g. by the background pipeline or api_finalize)
+    if not os.path.exists(step3_path):
+        _generate_final_report(unique_id)
+    
+    f_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_fonepay_{unique_id}.xlsx')
+    n_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_nepalpay_{unique_id}.xlsx')
+    f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
+    n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
+    
+    f_step2 = pd.read_excel(f_path2)
+    n_step2 = pd.read_excel(n_path2)
+    
+    f_df_len = len(pd.read_excel(f_path1)) if os.path.exists(f_path1) else len(f_step2)
+    n_df_len = len(pd.read_excel(n_path1)) if os.path.exists(n_path1) else len(n_step2)
+
     context = {
         'fonepay_count': f_df_len,
         'nepalpay_count': n_df_len,
@@ -510,6 +646,10 @@ def finalize_report(request, unique_id):
         'fonepay_districts': get_dist_counts(f_step2),
         'nepalpay_provinces': get_prov_counts(n_step2),
         'nepalpay_districts': get_dist_counts(n_step2),
+        'fonepay_step1_provinces': get_prov_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
+        'fonepay_step1_districts': get_dist_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
+        'nepalpay_step1_provinces': get_prov_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
+        'nepalpay_step1_districts': get_dist_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
         'success': True
     }
     return render(request, 'merchant/upload.html', context)
