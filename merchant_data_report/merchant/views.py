@@ -201,8 +201,8 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
     
     if uid: _set_progress(uid, 2, 'active', f'Filtering columns — {len(fonepay_df):,} FonePay + {len(nepalpay_df):,} NepalPay records')
     
-    fonepay_requested = ['merchantid', 'accountnumber', 'province', 'district', 'municipality', 'amount', 'tax', 'taxes', 'count']
-    nepalpay_requested = ['province', 'district', 'accountnumber', 'merchantcode']
+    fonepay_requested = ['merchantid', 'accountnumber', 'province', 'district', 'municipality', 'amount', 'tax', 'taxes', 'count', 'gender', 'age', 'address1', 'address2']
+    nepalpay_requested = ['province', 'district', 'accountnumber', 'merchantcode', 'municipality', 'gender', 'age', 'address1', 'address2']
     
     fonepay_df = filter_dataframe(fonepay_df, fonepay_requested)
     nepalpay_df = filter_dataframe(nepalpay_df, nepalpay_requested)
@@ -274,22 +274,21 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         fonepay_step2_df['district'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'district'), axis=1)
         fonepay_step2_df['municipality'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'municipality'), axis=1)
         
-        fonepay_step2_df['gender'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'gender'), axis=1)
-        fonepay_step2_df['age'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'age'), axis=1)
-        fonepay_step2_df['address_1'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'address_1'), axis=1)
-        fonepay_step2_df['address_2'] = fonepay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(fonepay_acc_col)).strip(), 'address_2'), axis=1)
+        fonepay_step2_df['gender'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'gender'), axis=1)
+        fonepay_step2_df['age'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'age'), axis=1)
+        fonepay_step2_df['address_1'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address1', cbs_col='address_1'), axis=1)
+        fonepay_step2_df['address_2'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address2', cbs_col='address_2'), axis=1)
 
     if nepalpay_acc_col:
         fill_np = get_fill_col(nepalpay_acc_col, cbs_lookup)
         nepalpay_step2_df['province'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'province'), axis=1)
         nepalpay_step2_df['district'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'district'), axis=1)
         
-        nepalpay_step2_df['municipality'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'municipality'), axis=1)
-        
-        nepalpay_step2_df['gender'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'gender'), axis=1)
-        nepalpay_step2_df['age'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'age'), axis=1)
-        nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'address_1'), axis=1)
-        nepalpay_step2_df['address_2'] = nepalpay_step2_df.apply(lambda r: safe_get_cbs(str(r.get(nepalpay_acc_col)).strip(), 'address_2'), axis=1)
+        nepalpay_step2_df['municipality'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'municipality'), axis=1)
+        nepalpay_step2_df['gender'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'gender'), axis=1)
+        nepalpay_step2_df['age'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'age'), axis=1)
+        nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address1', cbs_col='address_1'), axis=1)
+        nepalpay_step2_df['address_2'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address2', cbs_col='address_2'), axis=1)
 
     output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(output_dir, exist_ok=True)

@@ -380,6 +380,32 @@
                         </a>
                     </div>
                 </div>
+                
+                {% if fonepay_step1_provinces %}
+                <h3 style="font-size: 0.95rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--text-main);">Initial Geographical Breakdown (Before CBS)</h3>
+                <div class="res-grid" style="grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0;">
+                    <div class="data-box">
+                        <h5 style="color: var(--blue);">Fonepay Provinces</h5>
+                        {% for prov, count in fonepay_step1_provinces.items %}<div class="data-row"><span>{{ prov }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                    </div>
+                    <div class="data-box">
+                        <h5 style="color: var(--blue);">Fonepay Districts</h5>
+                        <div class="scroll-area">
+                            {% for dist, count in fonepay_step1_districts.items %}<div class="data-row"><span>{{ dist }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                        </div>
+                    </div>
+                    <div class="data-box">
+                        <h5 style="color: var(--orange);">Nepal Pay Provinces</h5>
+                        {% for prov, count in nepalpay_step1_provinces.items %}<div class="data-row"><span>{{ prov }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                    </div>
+                    <div class="data-box">
+                        <h5 style="color: var(--orange);">Nepal Pay Districts</h5>
+                        <div class="scroll-area">
+                            {% for dist, count in nepalpay_step1_districts.items %}<div class="data-row"><span>{{ dist }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
 
             <div class="res-section">
@@ -402,6 +428,32 @@
                         </a>
                     </div>
                 </div>
+
+                {% if fonepay_provinces %}
+                <h3 style="font-size: 0.95rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--text-main);">Final Geographical Breakdown (After CBS)</h3>
+                <div class="res-grid" style="grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0;">
+                    <div class="data-box">
+                        <h5 style="color: var(--blue);">Fonepay Provinces</h5>
+                        {% for prov, count in fonepay_provinces.items %}<div class="data-row"><span>{{ prov }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                    </div>
+                    <div class="data-box">
+                        <h5 style="color: var(--blue);">Fonepay Districts</h5>
+                        <div class="scroll-area">
+                            {% for dist, count in fonepay_districts.items %}<div class="data-row"><span>{{ dist }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                        </div>
+                    </div>
+                    <div class="data-box">
+                        <h5 style="color: var(--orange);">Nepal Pay Provinces</h5>
+                        {% for prov, count in nepalpay_provinces.items %}<div class="data-row"><span>{{ prov }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                    </div>
+                    <div class="data-box">
+                        <h5 style="color: var(--orange);">Nepal Pay Districts</h5>
+                        <div class="scroll-area">
+                            {% for dist, count in nepalpay_districts.items %}<div class="data-row"><span>{{ dist }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
             
         </div>
