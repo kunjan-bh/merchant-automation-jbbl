@@ -343,10 +343,24 @@ def _generate_final_report(unique_id):
     f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
     n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
     
+    c_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'card_data_{unique_id}.xlsx')
+    p_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'phonepay_{unique_id}.xlsx')
+    np_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'nepalpay_{unique_id}.xlsx')
+    cl_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'cardless_{unique_id}.xlsx')
+    
     f_step2 = pd.read_excel(f_path2)
     n_step2 = pd.read_excel(n_path2)
     f_acc_col = find_account_col(f_step2)
     n_acc_col = find_account_col(n_step2)
+    
+    try: card_df = pd.read_excel(c_path)
+    except: card_df = pd.DataFrame()
+    try: phonepay_df = pd.read_excel(p_path)
+    except: phonepay_df = pd.DataFrame()
+    try: nepalpay_df = pd.read_excel(np_path)
+    except: nepalpay_df = pd.DataFrame()
+    try: cardless_df = pd.read_excel(cl_path)
+    except: cardless_df = pd.DataFrame()
     
     def get_norm_df(df, acc_col):
         if df is None or df.empty or not acc_col: return pd.DataFrame()
@@ -431,6 +445,188 @@ def _generate_final_report(unique_id):
         ws['A1'] = 'Merchants Onboarded by Licensed Institutions-Gender Wise As of Month End'
         from openpyxl.styles import Font
         ws['A1'].font = Font(bold=True)
+        
+        # --- NEW LOGIC: International and Domestic Transactions ---
+        def get_col(df, possible_names):
+            if df is None or df.empty: return None
+            import re
+            def clean(s): return re.sub(r'[^a-z0-9]', '', str(s).lower())
+            
+            # Exact match
+            for pn in possible_names:
+                pn_clean = clean(pn)
+                for c in df.columns:
+                    if pn_clean == clean(c): return c
+                    
+            # Prefix match ('amount' catches 'amountnpr' skipping 'commissionamount')
+            for pn in possible_names:
+                pn_clean = clean(pn)
+                for c in df.columns:
+                    if clean(c).startswith(pn_clean): return c
+                    
+            # Substring fallback
+            for pn in possible_names:
+                pn_clean = clean(pn)
+                for c in df.columns:
+                    if pn_clean in clean(c): return c
+            return None
+            
+        def sum_col(df, col_keywords):
+            col = get_col(df, col_keywords)
+            if col: return pd.to_numeric(df[col], errors='coerce').sum()
+            return 0
+
+        def calc_amount_and_count(df, base_mask, amt_col_keys):
+            if df.empty or not base_mask.any(): return 0, 0
+            
+            rflag_col = get_col(df, ['reversalflag'])
+            if rflag_col:
+                rflag_numeric = pd.to_numeric(df[rflag_col], errors='coerce')
+                mask0 = base_mask & (rflag_numeric == 0)
+                mask1 = base_mask & (rflag_numeric == 1)
+            else:
+                mask0 = base_mask
+                mask1 = pd.Series(False, index=df.index)
+                
+            amt_col = get_col(df, amt_col_keys)
+            
+            cnt = len(df[mask0]) - len(df[mask1])
+            if amt_col:
+                amt0 = pd.to_numeric(df.loc[mask0, amt_col], errors='coerce').sum()
+                amt1 = pd.to_numeric(df.loc[mask1, amt_col], errors='coerce').sum()
+                amt = amt0 - amt1
+            else:
+                amt = 0
+            return cnt, amt
+
+        # Fields mapped from user definitions
+        cnum = get_col(card_df, ['cardnumber'])
+        curr = get_col(card_df, ['currency'])
+        ttype = get_col(card_df, ['transtype'])
+        atm_surch = get_col(card_df, ['atmsurcharge'])
+        
+        # Int - Card Acquiring -> ATM Terminals
+        ca_atm_cnt = ca_atm_amt = 0
+        if atm_surch:
+            mask = pd.to_numeric(card_df[atm_surch], errors='coerce') == 500
+            ca_atm_cnt, ca_atm_amt = calc_amount_and_count(card_df, mask, ['txnamt', 'amount', 'taxationamount'])
+
+        # Int - Card Issuing Base masks
+        ci_dc_cnt = ci_dc_amt = 0
+        ci_cc_cnt = ci_cc_amt = 0
+        ci_pc_cnt = ci_pc_amt = 0
+        ci_dc_pos_cnt = ci_dc_pos_amt = 0
+        ci_dc_onl_cnt = ci_dc_onl_amt = 0
+        ci_dc_atm_cnt = ci_dc_atm_amt = 0
+        
+        if cnum and curr:
+            currency_mask = pd.to_numeric(card_df[curr], errors='coerce') != 524
+            
+            # Debit Cards (starts with 408833)
+            dc_mask = card_df[cnum].astype(str).str.startswith('408833', na=False) & currency_mask
+            ci_dc_cnt, ci_dc_amt = calc_amount_and_count(card_df, dc_mask, ['billingamt', 'amount'])
+            
+            # Credit Cards (starts with 466043)
+            cc_mask = card_df[cnum].astype(str).str.startswith('466043', na=False) & currency_mask
+            ci_cc_cnt, ci_cc_amt = calc_amount_and_count(card_df, cc_mask, ['billingamt', 'amount'])
+            
+            # Prepaid Cards (starts with 463724)
+            pc_mask = card_df[cnum].astype(str).str.startswith('463724', na=False) & currency_mask
+            ci_pc_cnt, ci_pc_amt = calc_amount_and_count(card_df, pc_mask, ['billingamt', 'amount'])
+            
+            # Subcategories of Debit Card (POS, Online, ATM)
+            if ttype:
+                tt = pd.to_numeric(card_df[ttype], errors='coerce')
+                
+                # POS (774)
+                pos_mask = dc_mask & (tt == 774)
+                ci_dc_pos_cnt, ci_dc_pos_amt = calc_amount_and_count(card_df, pos_mask, ['billingamt', 'amount'])
+                
+                # Online (ecommerce - 680)
+                onl_mask = dc_mask & (tt == 680)
+                ci_dc_onl_cnt, ci_dc_onl_amt = calc_amount_and_count(card_df, onl_mask, ['billingamt', 'amount'])
+                
+                # ATM (700)
+                atm_mask = dc_mask & (tt == 700)
+                ci_dc_atm_cnt, ci_dc_atm_amt = calc_amount_and_count(card_df, atm_mask, ['billingamt', 'amount'])
+
+        # Int - QR Acquiring (Alipay & NPCI)
+        qr_acq_cnt = qr_acq_amt = 0
+        issuer_col = get_col(phonepay_df, ['issuer'])
+        if issuer_col:
+            mask = phonepay_df[issuer_col].astype(str).str.contains('alipay|npci', case=False, na=False)
+            qr_acq_cnt = mask.sum() 
+            qr_acq_amt = sum_col(phonepay_df[mask], ['originalamount', 'amount'])
+
+        int_data = [
+            ['1. Card Acquiring', '', ''],
+            ['A. Of which:', '', ''],
+            ['A.1 Debit Card', 0, 0.0],
+            ['A.2 Credit Card', 0, 0.0],
+            ['A.3 Prepaid Card', 0, 0.0],
+            ['B. Of which:', '', ''],
+            ['B.1 POS', 0, 0.0],
+            ['B.2 Online (ecommerce)', 0, 0.0],
+            ['B.3 ATM Terminals', ca_atm_cnt, ca_atm_amt],
+            ['', '', ''],
+            ['2. Card Issuing', '', ''],
+            ['A. Of which:', '', ''],
+            ['A.1 Debit Card', ci_dc_cnt, ci_dc_amt],
+            ['A.2 Credit Card', ci_cc_cnt, ci_cc_amt],
+            ['A.3 Prepaid Card', ci_pc_cnt, ci_pc_amt],
+            ['B. Of which:', '', ''],
+            ['B.1 POS', ci_dc_pos_cnt, ci_dc_pos_amt],
+            ['B.2 Online (ecommerce)', ci_dc_onl_cnt, ci_dc_onl_amt],
+            ['B.3 ATM Terminals', ci_dc_atm_cnt, ci_dc_atm_amt],
+            ['', '', ''],
+            ['3. QR Acquiring', qr_acq_cnt, qr_acq_amt],
+            ['4. QR Issuing', 0, 0.0],
+            ['5. Inward P2P Transfers', 0, 0.0],
+            ['6. Outward P2P Transfers', 0, 0.0],
+        ]
+        
+        int_df = pd.DataFrame(int_data, columns=['Particulars', 'Txn Count(Number)', 'Txn Amount(NPR)'])
+        
+        # Domestic - Cardless Withdrawals
+        dom_cw_cnt = len(cardless_df) if not cardless_df.empty else 0
+        dom_cw_amt = sum_col(cardless_df, ['amount', 'taxationamount'])
+        
+        # Domestic - NFC Transactions
+        dom_nfc_cnt = dom_nfc_amt = 0
+        cinput = get_col(card_df, ['cardinput'])
+        if cinput and ttype:
+            nfc_mask = card_df[cinput].astype(str).str.lower().str.contains('contactless|contact list', na=False)
+            nfc_mask = nfc_mask & (pd.to_numeric(card_df[ttype], errors='coerce') == 774)
+            dom_nfc_cnt, dom_nfc_amt = calc_amount_and_count(card_df, nfc_mask, ['billingamt'])
+            
+        # Domestic - QR Enabled Merchants
+        dom_qr_cnt = (len(nepalpay_df) if not nepalpay_df.empty else 0) + (len(phonepay_df) if not phonepay_df.empty else 0)
+        dom_qr_amt = sum_col(nepalpay_df, ['amount']) + sum_col(phonepay_df, ['originalamount', 'amount'])
+        
+        dom_data = [
+            ['1. Card Transactions', '', ''],
+            ['1.1 Cardless Withdrawals Via ATM', dom_cw_cnt, dom_cw_amt],
+            ['1.2 NFC Transactions in Merchant Terminals', dom_nfc_cnt, dom_nfc_amt],
+            ['', '', ''],
+            ['2. Total Merchants', '', ''],
+            ['2.1 POS-enabled Merchants', 0, 0.0],
+            ['2.2 QR-Enabled Merchants', dom_qr_cnt, dom_qr_amt],
+            ['2.3 E-Commerce Enabled Merchants', 0, 0.0],
+        ]
+        
+        dom_df = pd.DataFrame(dom_data, columns=['Particulars', 'Txn Count(Number)', 'Txn Amount(NPR)'])
+        
+        write_sheet(int_df, '1.International Transactions', 'International Transactions for the month Ashwin')
+        write_sheet(dom_df, '2.Domestic Transactions', 'Domestic Transactions for the month Ashwin')
+        
+        # Reorder sheets to put International and Domestic at the front (openpyxl specific)
+        wb = writer.book
+        moved_s1 = wb['1.International Transactions']
+        moved_s2 = wb['2.Domestic Transactions']
+        wb._sheets.remove(moved_s1)
+        wb._sheets.remove(moved_s2)
+        wb._sheets.insert(0, moved_s1)
+        wb._sheets.insert(1, moved_s2)
 
     f_df_len = len(pd.read_excel(f_path1)) if os.path.exists(f_path1) else len(f_step2)
     n_df_len = len(pd.read_excel(n_path1)) if os.path.exists(n_path1) else len(n_step2)
@@ -499,17 +695,30 @@ def api_start(request):
         return JsonResponse({'error': 'POST required'}, status=405)
     
     file = request.FILES.get('file')
-    if not file or not file.name.endswith(('.xlsx', '.xls')):
-        return JsonResponse({'error': 'Please upload a valid Excel file (.xlsx or .xls)'}, status=400)
+    card_data = request.FILES.get('card_data')
+    phonepay_details = request.FILES.get('phonepay_details')
+    nepalpay_details = request.FILES.get('nepalpay_details')
+    cardless_report = request.FILES.get('cardless_report')
+
+    if not file or not card_data or not phonepay_details or not nepalpay_details or not cardless_report:
+        return JsonResponse({'error': 'Please upload all required files.'}, status=400)
     
     uid = str(uuid.uuid4())[:8]
     tmp_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_path = os.path.join(tmp_dir, f'upload_{uid}.xlsx')
     
-    with open(tmp_path, 'wb') as f:
-        for chunk in file.chunks():
-            f.write(chunk)
+    def save_file(f, prefix):
+        path = os.path.join(tmp_dir, f'{prefix}_{uid}.xlsx')
+        with open(path, 'wb') as df:
+            for chunk in f.chunks():
+                df.write(chunk)
+        return path
+
+    tmp_path = save_file(file, 'upload')
+    save_file(card_data, 'card_data')
+    save_file(phonepay_details, 'phonepay')
+    save_file(nepalpay_details, 'nepalpay')
+    save_file(cardless_report, 'cardless')
     
     _set_progress(uid, 0, 'started', 'Pipeline initiated')
     

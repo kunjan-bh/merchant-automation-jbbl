@@ -257,6 +257,11 @@
         .scroll-area { max-height: 150px; overflow-y: auto; padding-right: 4px;}
         .scroll-area::-webkit-scrollbar { width: 4px; }
         .scroll-area::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        
+        .file-group { margin-bottom: 1rem; text-align: left; }
+        .file-group label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-main); }
+        .file-group input[type="file"] { width: 100%; font-size: 0.8rem; padding: 0.5rem; border: 1px dashed #d1d5db; border-radius: 6px; background: #fdfdfd; cursor: pointer; }
+        .file-group input[type="file"]::file-selector-button { background: var(--blue-bg); border: 1px solid #cce4f6; color: var(--blue); padding: 4px 8px; border-radius: 4px; font-weight: 500; margin-right: 8px; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -286,16 +291,25 @@
 
         <form id="uploadForm">
             {% csrf_token %}
-            <div class="drop-zone" id="dropZone">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-                <div class="label">Click or drag file here</div>
-                <div class="hint">Accepts .xlsx or .xls</div>
+            <div class="file-group">
+                <label>Total Merchant file (FonePay + NepalPay)</label>
                 <input type="file" name="file" id="fileInput" accept=".xlsx,.xls" required>
             </div>
-            
-            <div class="file-badge" id="fileBadge" style="display: none;">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                <span id="fileNameTr">filename.xlsx</span>
+            <div class="file-group">
+                <label>Card Data (02)</label>
+                <input type="file" name="card_data" id="cardDataInput" accept=".xlsx,.xls" required>
+            </div>
+            <div class="file-group">
+                <label>PhonePay Payment Details</label>
+                <input type="file" name="phonepay_details" id="phonepayDetailsInput" accept=".xlsx,.xls" required>
+            </div>
+            <div class="file-group">
+                <label>Nepal Pay Payment Details</label>
+                <input type="file" name="nepalpay_details" id="nepalpayDetailsInput" accept=".xlsx,.xls" required>
+            </div>
+            <div class="file-group">
+                <label>Report 50 (Cardless Report)</label>
+                <input type="file" name="cardless_report" id="cardlessReportInput" accept=".xlsx,.xls" required>
             </div>
 
             <button type="submit" class="btn-go" id="goBtn">
@@ -463,33 +477,7 @@
 
 <script>
     // --- File Input UI ---
-    const fileInput = document.getElementById('fileInput');
-    const dropZone = document.getElementById('dropZone');
-    const fileBadge = document.getElementById('fileBadge');
-    const fileNameTr = document.getElementById('fileNameTr');
-    
-    if (fileInput) {
-        fileInput.addEventListener('change', function() {
-            if (this.files.length) { 
-                fileNameTr.textContent = this.files[0].name; 
-                fileBadge.style.display = 'flex'; 
-                dropZone.style.display = 'none';
-            }
-        });
-    }
-    if (dropZone) {
-        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
-        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-        dropZone.addEventListener('drop', e => {
-            e.preventDefault(); dropZone.classList.remove('dragover');
-            if (e.dataTransfer.files.length) { 
-                fileInput.files = e.dataTransfer.files; 
-                fileNameTr.textContent = e.dataTransfer.files[0].name; 
-                fileBadge.style.display = 'flex';
-                dropZone.style.display = 'none';
-            }
-        });
-    }
+    // (Removed drag and drop logic to support the new multi-file simple inputs)
 
     // --- Claude-style Timeline Setup ---
     const iconDoc = `<svg class="cv-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`;
@@ -542,7 +530,17 @@
     if (form) {
         form.addEventListener('submit', function(e) {
             e.preventDefault();
-            if (!fileInput.files.length) { alert('Please select a file.'); return; }
+            
+            const fileInput = document.getElementById('fileInput');
+            const cardDataInput = document.getElementById('cardDataInput');
+            const phonepayDetailsInput = document.getElementById('phonepayDetailsInput');
+            const nepalpayDetailsInput = document.getElementById('nepalpayDetailsInput');
+            const cardlessReportInput = document.getElementById('cardlessReportInput');
+
+            if (!fileInput.files.length || !cardDataInput.files.length || !phonepayDetailsInput.files.length || !nepalpayDetailsInput.files.length || !cardlessReportInput.files.length) { 
+                alert('Please select all required files.'); 
+                return; 
+            }
             
             goBtn.disabled = true; 
             goBtn.innerHTML = `<svg class="icon-spinner" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Starting...`;
@@ -555,9 +553,7 @@
             
             initTimeline();
 
-            const fd = new FormData();
-            fd.append('file', fileInput.files[0]);
-            fd.append('csrfmiddlewaretoken', form.querySelector('[name=csrfmiddlewaretoken]').value);
+            const fd = new FormData(form);
 
             fetch('/api/start/', { method: 'POST', body: fd })
             .then(r => r.json())
