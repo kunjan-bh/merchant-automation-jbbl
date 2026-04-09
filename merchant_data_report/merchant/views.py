@@ -440,18 +440,30 @@ def _generate_final_report(unique_id):
         center_align = Alignment(horizontal='center')
 
         def apply_table_format(ws, data_rows, data_cols):
-            """Apply black thin borders and bold headers to the data area."""
-            # Bold + border on header row (row 2)
+            """Apply black thin borders and bold headers, skipping empty spacer columns."""
+            # Identify spacer columns (header is empty or whitespace-only)
+            spacer_cols = set()
             for col_idx in range(1, data_cols + 1):
+                hdr = ws.cell(row=2, column=col_idx).value
+                if hdr is None or str(hdr).strip() == '':
+                    spacer_cols.add(col_idx)
+
+            for col_idx in range(1, data_cols + 1):
+                if col_idx in spacer_cols:
+                    continue
+                # Bold + border on header row (row 2)
                 cell = ws.cell(row=2, column=col_idx)
                 cell.font = header_font
                 cell.border = thin_border
-            # Borders on all data rows
-            for row_idx in range(3, 3 + data_rows):
-                for col_idx in range(1, data_cols + 1):
+                # Borders on data rows
+                for row_idx in range(3, 3 + data_rows):
                     ws.cell(row=row_idx, column=col_idx).border = thin_border
-            # Auto-fit column widths (approximate)
+
+            # Auto-fit column widths
             for col_idx in range(1, data_cols + 1):
+                if col_idx in spacer_cols:
+                    ws.column_dimensions[ws.cell(row=2, column=col_idx).column_letter].width = 3
+                    continue
                 max_len = 0
                 for row_idx in range(2, 3 + data_rows):
                     val = ws.cell(row=row_idx, column=col_idx).value
