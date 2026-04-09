@@ -429,15 +429,45 @@ def _generate_final_report(unique_id):
     step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
     
     with pd.ExcelWriter(step3_path, engine='openpyxl') as writer:
+        from openpyxl.styles import Font, Alignment, Border, Side
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin'),
+        )
+        header_font = Font(bold=True)
+        center_align = Alignment(horizontal='center')
+
+        def apply_table_format(ws, data_rows, data_cols):
+            """Apply black thin borders and bold headers to the data area."""
+            # Bold + border on header row (row 2)
+            for col_idx in range(1, data_cols + 1):
+                cell = ws.cell(row=2, column=col_idx)
+                cell.font = header_font
+                cell.border = thin_border
+            # Borders on all data rows
+            for row_idx in range(3, 3 + data_rows):
+                for col_idx in range(1, data_cols + 1):
+                    ws.cell(row=row_idx, column=col_idx).border = thin_border
+            # Auto-fit column widths (approximate)
+            for col_idx in range(1, data_cols + 1):
+                max_len = 0
+                for row_idx in range(2, 3 + data_rows):
+                    val = ws.cell(row=row_idx, column=col_idx).value
+                    if val is not None:
+                        max_len = max(max_len, len(str(val)))
+                ws.column_dimensions[ws.cell(row=2, column=col_idx).column_letter].width = max(max_len + 2, 10)
+
         def write_sheet(df, sheet_name, title):
             if df.empty: df = pd.DataFrame(["No Data"])
             df.to_excel(writer, sheet_name=sheet_name, startrow=1, index=False)
             ws = writer.sheets[sheet_name]
             ws.merge_cells('B1:G1')
             ws['B1'] = title
-            from openpyxl.styles import Font, Alignment
-            ws['B1'].font = Font(bold=True)
-            ws['B1'].alignment = Alignment(horizontal='center')
+            ws['B1'].font = header_font
+            ws['B1'].alignment = center_align
+            apply_table_format(ws, len(df), len(df.columns))
             
         write_sheet(df_province, '3.No of Merchants_Province', 'Merchants Accepting Digital Payments (Onboarded by Licensed Institutions) As of Month end - Province Level wise')
         write_sheet(df_local, '4.No of Merchants_Local', 'Merchants Accepting Digital Payments (Onboarded by Licensed Institutions) As of Month end - Local Level wise')
@@ -447,8 +477,8 @@ def _generate_final_report(unique_id):
         ws = writer.sheets['6.Genderwise_Merchant']
         ws.merge_cells('A1:B1')
         ws['A1'] = 'Merchants Onboarded by Licensed Institutions-Gender Wise As of Month End'
-        from openpyxl.styles import Font
-        ws['A1'].font = Font(bold=True)
+        ws['A1'].font = header_font
+        apply_table_format(ws, len(g_df), len(g_df.columns))
         
         # --- NEW LOGIC: International and Domestic Transactions ---
         def get_col(df, possible_names):
