@@ -359,7 +359,11 @@ def _generate_final_report(unique_id):
     except: phonepay_df = pd.DataFrame()
     try: nepalpay_df = pd.read_excel(np_path)
     except: nepalpay_df = pd.DataFrame()
-    try: cardless_df = pd.read_excel(cl_path)
+    try:
+        _raw = pd.read_excel(cl_path, header=None)
+        _hdr = next((i for i, row in _raw.iterrows()
+                     if any('amount' in str(v).lower() for v in row.values)), None)
+        cardless_df = pd.read_excel(cl_path, header=_hdr) if _hdr is not None else pd.read_excel(cl_path)
     except: cardless_df = pd.DataFrame()
     
     def get_norm_df(df, acc_col):
@@ -588,8 +592,14 @@ def _generate_final_report(unique_id):
         int_df = pd.DataFrame(int_data, columns=['Particulars', 'Txn Count(Number)', 'Txn Amount(NPR)'])
         
         # Domestic - Cardless Withdrawals
-        dom_cw_cnt = len(cardless_df) if not cardless_df.empty else 0
-        dom_cw_amt = sum_col(cardless_df, ['amount', 'taxationamount'])
+        amt_col = get_col(cardless_df, ['amount'])
+        if amt_col:
+            amt_series = pd.to_numeric(cardless_df[amt_col], errors='coerce')
+            dom_cw_cnt = int(amt_series.notna().sum())
+            dom_cw_amt = amt_series.sum()
+        else:
+            dom_cw_cnt = len(cardless_df) if not cardless_df.empty else 0
+            dom_cw_amt = 0
         
         # Domestic - NFC Transactions
         dom_nfc_cnt = dom_nfc_amt = 0
