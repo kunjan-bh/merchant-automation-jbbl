@@ -27,7 +27,8 @@ def filter_dataframe(df, requested_cols):
 
 def find_account_col(df):
     for col in df.columns:
-        if str(col).lower().replace(' ', '').replace('_', '') == 'accountnumber':
+        norm = str(col).lower().replace(' ', '').replace('_', '')
+        if norm in ['accountnumber', 'merchantaccount']:
             return col
     return None
 
@@ -365,6 +366,37 @@ def _generate_final_report(unique_id):
                      if any('amount' in str(v).lower() for v in row.values)), None)
         cardless_df = pd.read_excel(cl_path, header=_hdr) if _hdr is not None else pd.read_excel(cl_path)
     except: cardless_df = pd.DataFrame()
+
+    # --- Vectorized CBS Patch for Payment Details ---
+    pp_acc_col = find_account_col(phonepay_df)
+    np2_acc_col = find_account_col(nepalpay_df)
+
+    add_accs = set()
+    if pp_acc_col: add_accs.update(phonepay_df[pp_acc_col].dropna().astype(str).tolist())
+    if np2_acc_col: add_accs.update(nepalpay_df[np2_acc_col].dropna().astype(str).tolist())
+
+    if add_accs:
+        all_cbs_add = pd.DataFrame(list(CBSMerchant.objects.filter(account_number__in=add_accs).values(
+            'account_number', 'province', 'district', 'municipality', 'gender'
+        )))
+        add_lookup = all_cbs_add.set_index('account_number') if not all_cbs_add.empty else pd.DataFrame()
+        
+        def patch_df_vectorized(df, acc_col):
+            if not acc_col or add_lookup.empty: return
+            accs = df[acc_col].astype(str)
+            for col in ['province', 'district', 'municipality', 'gender']:
+                if col not in df.columns: df[col] = None
+                
+                is_empty_mask = df[col].isna() | (df[col].astype(str).str.strip() == '') | (df[col].astype(str).str.lower() == 'null')
+                
+                if col in add_lookup.columns:
+                    map_s = accs.map(add_lookup[col])
+                    valid_map = map_s.notna() & (map_s.astype(str).str.strip() != '') & (map_s.astype(str).str.lower() != 'null')
+                    df.loc[is_empty_mask & valid_map, col] = map_s[is_empty_mask & valid_map]
+
+        patch_df_vectorized(phonepay_df, pp_acc_col)
+        patch_df_vectorized(nepalpay_df, np2_acc_col)
+    # ------------------------------------------------
     
     def get_norm_df(df, acc_col):
         if df is None or df.empty or not acc_col: return pd.DataFrame()
@@ -424,6 +456,115 @@ def _generate_final_report(unique_id):
         'Gender of Proprietor(POS,QR-Enabled,Online Enabled)': 'Total',
         'No. of Merchants': sum(g_counts.get(c, 0) for c in gender_cats)
     }])], ignore_index=True)
+
+    # --- Generate Sheets 7 to 10 for Payment Details ---
+    def get_col_txns(df, possible_names):
+        if df is None or df.empty: return None
+        import re
+        def clean(s): return re.sub(r'[^a-z0-9]', '', str(s).lower())
+        for pn in possible_names:
+            pn_clean = clean(pn)
+            for c in df.columns:
+                if pn_clean == clean(c): return c
+        for pn in possible_names:
+            pn_clean = clean(pn)
+            for c in df.columns:
+                if clean(c).startswith(pn_clean): return c
+        for pn in possible_names:
+            pn_clean = clean(pn)
+            for c in df.columns:
+                if pn_clean in clean(c): return c
+        return None
+
+    def get_norm_df_with_amount(df, acc_col, amt_cols):
+        if df is None or df.empty: return pd.DataFrame()
+        temp = pd.DataFrame()
+        temp['account_number'] = df[acc_col] if acc_col and acc_col in df.columns else None
+        for p in ['province', 'district', 'municipality', 'gender']:
+            found = False
+            for c in df.columns:
+                if str(c).lower().replace(' ', '').replace('_', '') == p:
+                    temp[p] = df[c]
+                    found = True; break
+            if not found: temp[p] = None
+        
+        amt_col = get_col_txns(df, amt_cols)
+        temp['amount'] = pd.to_numeric(df[amt_col], errors='coerce').fillna(0) if amt_col else 0.0
+        return temp
+
+    pp_norm = get_norm_df_with_amount(phonepay_df, pp_acc_col, ['originalamount', 'amount'])
+    np_norm = get_norm_df_with_amount(nepalpay_df, np2_acc_col, ['amount'])
+    all_payment_df = pd.concat([pp_norm, np_norm], ignore_index=True)
+
+    def create_txns_report_format(all_data, target_col, cats, index_col_name, map_func=None):
+        final_df = pd.DataFrame()
+        final_df[f'POS-enabled Merchants ({index_col_name}):'] = cats
+        final_df['Txn Count(Number)'] = 0
+        final_df['Txn Amount(NPR)'] = 0.0
+        final_df[''] = ''
+        
+        if not all_data.empty and target_col in all_data.columns:
+            mapped_series = all_data[target_col].apply(map_func) if map_func else all_data[target_col]
+            grp = all_data.groupby(mapped_series)
+            grouped_counts = grp.size().to_dict()
+            grouped_sums = grp['amount'].sum().to_dict()
+        else:
+            grouped_counts = {}
+            grouped_sums = {}
+            
+        final_df[f'QR-enabled Merchants ({index_col_name}):'] = cats
+        final_df['Txn Count(Number) '] = [grouped_counts.get(c, 0) for c in cats]
+        final_df['Txn Amount(NPR) '] = [round(grouped_sums.get(c, 0.0), 2) for c in cats]
+        final_df[' '] = ''
+        
+        final_df[f'Online-enabled Merchants ({index_col_name}):'] = cats
+        final_df['Txn Count(Number)  '] = 0
+        final_df['Txn Amount(NPR)  '] = 0.0
+        
+        total_row = pd.DataFrame([{
+            f'POS-enabled Merchants ({index_col_name}):': 'Total',
+            'Txn Count(Number)': 0,
+            'Txn Amount(NPR)': 0.0,
+            '': '',
+            f'QR-enabled Merchants ({index_col_name}):': 'Total',
+            'Txn Count(Number) ': sum(grouped_counts.get(c, 0) for c in cats),
+            'Txn Amount(NPR) ': round(sum(grouped_sums.get(c, 0.0) for c in cats), 2),
+            ' ': '',
+            f'Online-enabled Merchants ({index_col_name}):': 'Total',
+            'Txn Count(Number)  ': 0,
+            'Txn Amount(NPR)  ': 0.0,
+        }])
+        return pd.concat([final_df, total_row], ignore_index=True)
+
+    def create_txns_gender_format(all_data):
+        cats = ['Male', 'Female', 'Others (Gender other than Male and Female)', 'Company']
+        final_df = pd.DataFrame()
+        final_df['Gender of Proprietor(POS,QR-Enabled,Online Enabled)'] = cats
+        
+        if not all_data.empty and 'gender' in all_data.columns:
+            mapped_series = all_data['gender'].apply(map_gender)
+            grp = all_data.groupby(mapped_series)
+            grouped_counts = grp.size().to_dict()
+            grouped_sums = grp['amount'].sum().to_dict()
+        else:
+            grouped_counts = {}
+            grouped_sums = {}
+            
+        final_df['Txn Count(Number)'] = [grouped_counts.get(c, 0) for c in cats]
+        final_df['Txn Amount(NPR)'] = [round(grouped_sums.get(c, 0.0), 2) for c in cats]
+        
+        total_row = pd.DataFrame([{
+            'Gender of Proprietor(POS,QR-Enabled,Online Enabled)': 'Total',
+            'Txn Count(Number)': sum([grouped_counts.get(c, 0) for c in cats]),
+            'Txn Amount(NPR)': round(sum([grouped_sums.get(c, 0.0) for c in cats]), 2)
+        }])
+        return pd.concat([final_df, total_row], ignore_index=True)
+
+    df_province_pay = create_txns_report_format(all_payment_df, 'province', provinces_list, 'Province-wise', map_func=map_province)
+    df_local_pay = create_txns_report_format(all_payment_df, 'municipality', local_cats, 'Local Level-wise', map_func=map_local)
+    df_district_pay = create_txns_report_format(all_payment_df, 'district', districts_list, 'District-wise', map_func=map_district)
+    g_df_pay = create_txns_gender_format(all_payment_df)
+    # ---------------------------------------------------
 
     step3_filename = f'Additional_Payment_Report_ASCII_{unique_id}.xlsx'
     step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
@@ -491,6 +632,19 @@ def _generate_final_report(unique_id):
         ws['A1'] = 'Merchants Onboarded by Licensed Institutions-Gender Wise As of Month End'
         ws['A1'].font = header_font
         apply_table_format(ws, len(g_df), len(g_df.columns))
+
+        # --- Write Sheets 7 to 10 for Payment Details ---
+        write_sheet(df_province_pay, '7. Merchant Txns_Province', 'Province wise Merchant Transactions for the Month Ashwin')
+        write_sheet(df_district_pay, '8.Merchant Txns_District', 'District wise Transactions of Merchants for the Month Ashwin')
+        write_sheet(df_local_pay, '9.Merchant Txns_Local', 'Local Level Wise Merchant Transactions for the Month Ashwin')
+        
+        g_df_pay.to_excel(writer, sheet_name='10. Genderwise_Txn', startrow=1, index=False)
+        ws_pay = writer.sheets['10. Genderwise_Txn']
+        ws_pay.merge_cells('A1:C1')
+        ws_pay['A1'] = 'Transactions of Merchants Onboarded by Licensed Institutions-Gender Wise for the Month Ashwin'
+        ws_pay['A1'].font = header_font
+        apply_table_format(ws_pay, len(g_df_pay), len(g_df_pay.columns))
+        # ------------------------------------------------
         
         # --- NEW LOGIC: International and Domestic Transactions ---
         def get_col(df, possible_names):
