@@ -10,7 +10,10 @@ import uuid
 import random
 import json
 import threading
-from .models import CBSMerchant
+import re
+from datetime import date, datetime, timedelta
+from .models import CBSMerchant, CleanCBS
+from .country_codes import calculate_age as _calculate_age
 
 # --- HELPER FUNCTIONS ---
 
@@ -71,6 +74,7 @@ def check_missing_records(df, required_cols, index_col):
                     'needs_province': 'province' in missing,
                     'needs_district': 'district' in missing,
                     'needs_municipality': 'municipality' in missing,
+                    'needs_gender': 'gender' in missing,
                 }
             else:
                 for m in missing:
@@ -102,25 +106,33 @@ def map_district(d):
     if d_str not in districts_list: return 'Unmatched'
     return d_str
 
-local_cats = ['Metropolitan Cities', 'Sub-Metropolitan Cities', 'Municipalities', 'Rural Municipalities']
+local_cats = ['MP', 'MC', 'Sub MP', 'RM']
 def map_local(m):
+    # CBS format: "<Name> MP"     = Metropolitan City     (Mahanagar Palika)
+    #             "<Name> MC"     = Municipality           (Nagar Palika)
+    #             "<Name> Sub MP" = Sub-Metropolitan City  (Upa-Mahanagar Palika)
+    #             "<Name> RM"     = Rural Municipality     (Gaun Palika)
     if pd.isna(m) or str(m).strip() == '': return 'Unmatched'
     m_str = str(m).strip().upper()
-    if 'SMC' in m_str or 'SUB' in m_str: return 'Sub-Metropolitan Cities'
-    if 'MC' in m_str or 'METRO' in m_str: return 'Metropolitan Cities'
-    if 'RM' in m_str or 'RURAL' in m_str: return 'Rural Municipalities'
-    if 'M' in m_str or 'MUN' in m_str: return 'Municipalities'
+    # Sub-Metropolitan must be checked before Metropolitan
+    if 'SUB' in m_str: return 'Sub MP'
+    # Metropolitan: standalone MP or keyword METRO
+    if re.search(r'\bMP\b', m_str) or 'METRO' in m_str: return 'MP'
+    # Rural Municipality
+    if re.search(r'\bRM\b', m_str) or 'RURAL' in m_str: return 'RM'
+    # Municipality: standalone MC, standalone M, or keyword MUN
+    if re.search(r'\bMC\b', m_str) or re.search(r'\bM\b', m_str) or 'MUN' in m_str: return 'MC'
     return 'Unmatched'
 
 gender_cats = ['Male', 'Female', 'Others (Gender other than Male and Female)', 'Company']
 def map_gender(g):
-    if pd.isna(g) or str(g).strip() == '': return 'Unmatched'
+    if pd.isna(g) or str(g).strip() == '': return 'Company'
     g_str = str(g).strip().upper()
     if g_str in ['M', 'MALE']: return 'Male'
     if g_str in ['F', 'FEMALE']: return 'Female'
-    if g_str in ['O', 'OTHER', 'OTHERS']: return 'Others (Gender other than Male and Female)'
-    if g_str in ['C', 'COMPANY']: return 'Company'
-    return 'Unmatched'
+    # O/OTHER/OTHERS and everything else → Company. Others row is kept in the
+    # report for the NRB format but will always be 0.
+    return 'Company'
 
 def get_prov_counts(df):
     counts = {p: 0 for p in provinces_list}
@@ -163,35 +175,80 @@ def _set_progress(uid, step, status, detail='', extra=None):
 
 # --- BUSINESS LOGIC ---
 
+def _random_dob(min_age=18, max_age=70):
+    today = date.today()
+    age = random.randint(min_age, max_age)
+    return date(today.year - age, 1, 1) + timedelta(days=random.randint(0, 364))
+
+
 def generate_mock_data(all_accounts, nepalpay_accs=None, source_null_province=None, source_null_district=None):
     if nepalpay_accs is None: nepalpay_accs = set()
     if source_null_province is None: source_null_province = set()
     if source_null_district is None: source_null_district = set()
-    
+
     CBSMerchant.objects.filter(account_number__in=all_accounts).delete()
-    
-    mock_municipality_options = ["Kathmandu MC", "Lalitpur SMC", "Byans RM", "Bharatpur MC", "Hetauda SMC", "Birendranagar M", "Pokhara MC"]
-    
+
+    mock_municipality_options = ["Kathmandu MP", "Lalitpur Sub MP", "Byans RM", "Bharatpur MP", "Hetauda Sub MP", "Birendranagar MC", "Pokhara MP"]
+
     mock_merchants = []
     for acc in all_accounts:
         muni = "" if acc in nepalpay_accs else random.choice(mock_municipality_options)
         prov = "" if acc in source_null_province else random.choice(provinces_list)
         dist = "" if acc in source_null_district else random.choice(districts_list)
-        
+
         mock_merchants.append(CBSMerchant(
-            merchant_id=f"M_{acc}_{random.randint(1000, 9999)}",
-            merchant_code=f"C_{random.randint(100, 999)}",
             account_number=acc,
             province=prov,
             district=dist,
             municipality=muni,
             address_1=f"{random.randint(1, 100)} Random Marga",
             address_2=random.choice([f"Ward {random.randint(1, 32)}", "Near Branch", ""]),
-            gender=random.choice(['M', 'F', 'O', 'C']),
-            age=random.randint(18, 70),
+            gender=random.choice(['M', 'F', 'O']),
+            dob=_random_dob(),
+            country_code=random.choices(['01', '11', '41'], weights=[85, 10, 5])[0],
         ))
     if mock_merchants:
         CBSMerchant.objects.bulk_create(mock_merchants)
+
+def _ensure_clean_cbs(account_numbers):
+    """
+    Ensure every account in account_numbers has a CleanCBS record.
+    For accounts not yet in CleanCBS, copy data from CBSMerchant.
+    Accounts absent from both get an empty CleanCBS shell.
+    CBSMerchant is never modified — it is the read-only bank source.
+    """
+    accs = {str(a) for a in account_numbers if a and str(a).strip()}
+    if not accs:
+        return
+    # Chunk all DB queries — SQLite has a hard IN-clause limit (~999 variables)
+    existing = set()
+    for chunk in [list(accs)[i:i+900] for i in range(0, len(accs), 900)]:
+        existing.update(CleanCBS.objects.filter(account_number__in=chunk).values_list('account_number', flat=True))
+    new_accs = accs - existing
+    if not new_accs:
+        return
+    cbs_map = {}
+    new_accs_list = list(new_accs)
+    for chunk in [new_accs_list[i:i+900] for i in range(0, len(new_accs_list), 900)]:
+        for r in CBSMerchant.objects.filter(account_number__in=chunk).values(
+            'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender', 'dob', 'country_code'
+        ):
+            cbs_map[r['account_number']] = r
+    to_create = []
+    for acc in new_accs:
+        r = cbs_map.get(acc, {})
+        to_create.append(CleanCBS(
+            account_number=acc,
+            province=r.get('province') or '',
+            district=r.get('district') or '',
+            municipality=r.get('municipality') or '',
+            address_1=r.get('address_1') or '',
+            address_2=r.get('address_2') or '',
+            gender=r.get('gender') or '',
+            dob=r.get('dob'),
+            country_code=r.get('country_code') or '01',
+        ))
+    CleanCBS.objects.bulk_create(to_create, ignore_conflicts=True)
 
 def perform_step1_and_2(file_or_path, unique_id, uid=None):
     """Core pipeline. Accepts file object or path. If uid is provided, tracks progress."""
@@ -245,15 +302,19 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
                 source_null_province.add(acc)
             if np_dist_col and is_empty(row.get(np_dist_col)):
                 source_null_district.add(acc)
-    
+
     if uid: _set_progress(uid, 3, 'active', f'Querying CBS for {len(all_accounts):,} merchant accounts...')
     
     generate_mock_data(all_accounts, nepalpay_accs, source_null_province, source_null_district)
-    
-    all_cbs_data = pd.DataFrame(list(CBSMerchant.objects.filter(account_number__in=all_accounts).values(
-        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender', 'age'
+    _ensure_clean_cbs(all_accounts)
+
+    all_cbs_data = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=all_accounts).values(
+        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender', 'dob'
     )))
-    
+    # Derive age dynamically from DOB so there's no stored-age staleness.
+    if not all_cbs_data.empty:
+        all_cbs_data['age'] = all_cbs_data['dob'].apply(lambda d: _calculate_age(d) if pd.notna(d) else None)
+
     cbs_lookup = all_cbs_data.set_index('account_number') if not all_cbs_data.empty else pd.DataFrame()
 
     if uid: 
@@ -353,7 +414,11 @@ def _generate_final_report(unique_id):
     n_step2 = pd.read_excel(n_path2)
     f_acc_col = find_account_col(f_step2)
     n_acc_col = find_account_col(n_step2)
-    
+
+    # Read step-1 files once — reused for counts + province/district stats at the end
+    f_step1 = pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()
+    n_step1 = pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()
+
     try: card_df = pd.read_excel(c_path)
     except: card_df = pd.DataFrame()
     try: phonepay_df = pd.read_excel(p_path)
@@ -361,10 +426,16 @@ def _generate_final_report(unique_id):
     try: nepalpay_df = pd.read_excel(np_path)
     except: nepalpay_df = pd.DataFrame()
     try:
+        # Read once with header=None, detect header row, then re-slice in memory
         _raw = pd.read_excel(cl_path, header=None)
         _hdr = next((i for i, row in _raw.iterrows()
                      if any('amount' in str(v).lower() for v in row.values)), None)
-        cardless_df = pd.read_excel(cl_path, header=_hdr) if _hdr is not None else pd.read_excel(cl_path)
+        if _hdr is not None:
+            cardless_df = _raw.iloc[_hdr + 1:].copy()
+            cardless_df.columns = _raw.iloc[_hdr]
+            cardless_df = cardless_df.reset_index(drop=True)
+        else:
+            cardless_df = _raw.copy()
     except: cardless_df = pd.DataFrame()
 
     # --- Vectorized CBS Patch for Payment Details ---
@@ -376,19 +447,34 @@ def _generate_final_report(unique_id):
     if np2_acc_col: add_accs.update(nepalpay_df[np2_acc_col].dropna().astype(str).tolist())
 
     if add_accs:
-        all_cbs_add = pd.DataFrame(list(CBSMerchant.objects.filter(account_number__in=add_accs).values(
+        # Seed mock CBS records for any payment-detail accounts not yet in CBSMerchant,
+        # then ensure CleanCBS has a record for each (copying from CBSMerchant if needed).
+        existing_cbs_accs = set(CBSMerchant.objects.filter(
+            account_number__in=add_accs
+        ).values_list('account_number', flat=True))
+        new_accs = add_accs - existing_cbs_accs
+        if new_accs:
+            np_payment_accs = set()
+            if np2_acc_col and not nepalpay_df.empty:
+                np_payment_accs = set(nepalpay_df[np2_acc_col].dropna().astype(str).tolist())
+            generate_mock_data(new_accs, nepalpay_accs=np_payment_accs)
+        _ensure_clean_cbs(add_accs)
+
+        all_cbs_add = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=add_accs).values(
             'account_number', 'province', 'district', 'municipality', 'gender'
         )))
         add_lookup = all_cbs_add.set_index('account_number') if not all_cbs_add.empty else pd.DataFrame()
         
-        def patch_df_vectorized(df, acc_col):
+        def patch_df_vectorized(df, acc_col, exclude_cols=None):
             if not acc_col or add_lookup.empty: return
+            if exclude_cols is None: exclude_cols = set()
             accs = df[acc_col].astype(str)
             for col in ['province', 'district', 'municipality', 'gender']:
+                if col in exclude_cols: continue
                 if col not in df.columns: df[col] = None
-                
+
                 is_empty_mask = df[col].isna() | (df[col].astype(str).str.strip() == '') | (df[col].astype(str).str.lower() == 'null')
-                
+
                 if col in add_lookup.columns:
                     map_s = accs.map(add_lookup[col])
                     valid_map = map_s.notna() & (map_s.astype(str).str.strip() != '') & (map_s.astype(str).str.lower() != 'null')
@@ -824,7 +910,17 @@ def _generate_final_report(unique_id):
         
         write_sheet(int_df, '1.International Transactions', 'International Transactions for the month Ashwin')
         write_sheet(dom_df, '2.Domestic Transactions', 'Domestic Transactions for the month Ashwin')
-        
+
+        # --- Sheet 11: Digital Channel Users (Mobile Banking + Connect IPS) ---
+        import traceback as _tb
+        try:
+            from .processors_users import write_sheet_11_from_uid
+            write_sheet_11_from_uid(writer, unique_id)
+        except Exception as _e:
+            # Sheet 11 failure must never break sheets 1-10, but log the full trace.
+            print(f"[sheet11] ERROR — sheet omitted: {_e}\n{_tb.format_exc()}")
+        # ---------------------------------------------------------------------
+
         # Reorder sheets to put International and Domestic at the front (openpyxl specific)
         wb = writer.book
         moved_s1 = wb['1.International Transactions']
@@ -834,52 +930,154 @@ def _generate_final_report(unique_id):
         wb._sheets.insert(0, moved_s1)
         wb._sheets.insert(1, moved_s2)
 
-    f_df_len = len(pd.read_excel(f_path1)) if os.path.exists(f_path1) else len(f_step2)
-    n_df_len = len(pd.read_excel(n_path1)) if os.path.exists(n_path1) else len(n_step2)
-
     return {
         'step3_filename': step3_filename,
-        'fonepay_count': f_df_len,
-        'nepalpay_count': n_df_len,
+        'fonepay_count': len(f_step1) if not f_step1.empty else len(f_step2),
+        'nepalpay_count': len(n_step1) if not n_step1.empty else len(n_step2),
         'fonepay_provinces': get_prov_counts(f_step2),
         'fonepay_districts': get_dist_counts(f_step2),
         'nepalpay_provinces': get_prov_counts(n_step2),
         'nepalpay_districts': get_dist_counts(n_step2),
-        'fonepay_step1_provinces': get_prov_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
-        'fonepay_step1_districts': get_dist_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
-        'nepalpay_step1_provinces': get_prov_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
-        'nepalpay_step1_districts': get_dist_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
+        'fonepay_step1_provinces': get_prov_counts(f_step1),
+        'fonepay_step1_districts': get_dist_counts(f_step1),
+        'nepalpay_step1_provinces': get_prov_counts(n_step1),
+        'nepalpay_step1_districts': get_dist_counts(n_step1),
     }
 
 
 # --- BACKGROUND PIPELINE ---
 
+def _check_payment_detail_missing(uid):
+    """
+    Pre-enrich payment-detail accounts (PhonePay + NepalPay txn files) via CBS.
+    Seeds mock CBS for any accounts not yet present, then returns a dict of
+    accounts that still have at least one empty field (province/district/
+    municipality/gender) keyed by account number.
+    """
+    output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
+    p_path = os.path.join(output_dir, f'phonepay_{uid}.xlsx')
+    np_path = os.path.join(output_dir, f'nepalpay_{uid}.xlsx')
+
+    try: phonepay_df_pay = pd.read_excel(p_path)
+    except: phonepay_df_pay = pd.DataFrame()
+    try: nepalpay_df_pay = pd.read_excel(np_path)
+    except: nepalpay_df_pay = pd.DataFrame()
+
+    pp_acc_col = find_account_col(phonepay_df_pay)
+    np_acc_col = find_account_col(nepalpay_df_pay)
+
+    add_accs = set()
+    np_payment_accs = set()
+    if pp_acc_col and not phonepay_df_pay.empty:
+        add_accs.update(phonepay_df_pay[pp_acc_col].dropna().astype(str).tolist())
+    if np_acc_col and not nepalpay_df_pay.empty:
+        np_accs = set(nepalpay_df_pay[np_acc_col].dropna().astype(str).tolist())
+        add_accs.update(np_accs)
+        np_payment_accs = np_accs
+
+    if not add_accs:
+        return {}
+
+    # Seed mock CBS for any payment-detail accounts not yet in CBSMerchant,
+    # then sync to CleanCBS (our writable copy).
+    existing_accs = set(CBSMerchant.objects.filter(
+        account_number__in=add_accs
+    ).values_list('account_number', flat=True))
+    new_accs = add_accs - existing_accs
+    if new_accs:
+        generate_mock_data(new_accs, nepalpay_accs=np_payment_accs)
+    _ensure_clean_cbs(add_accs)
+
+    cbs_rows = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=add_accs).values(
+        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender'
+    )))
+    if cbs_rows.empty:
+        return {}
+    cbs_pay_lookup = cbs_rows.set_index('account_number')
+
+    missing_dict = {}
+    for acc in add_accs:
+        if acc not in cbs_pay_lookup.index:
+            continue
+        row = cbs_pay_lookup.loc[acc]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[0]
+
+        needs_province     = is_empty(row.get('province'))
+        needs_district     = is_empty(row.get('district'))
+        needs_gender       = is_empty(row.get('gender'))
+        needs_municipality = is_empty(row.get('municipality'))
+
+        if any([needs_province, needs_district, needs_municipality, needs_gender]):
+            missing_dict[acc] = {
+                'account_number': acc,
+                'is_nepalpay': acc in np_payment_accs,
+                'address_1': str(row.get('address_1') or ''),
+                'address_2': str(row.get('address_2') or ''),
+                'needs_province': needs_province,
+                'needs_district': needs_district,
+                'needs_municipality': needs_municipality,
+                'needs_gender': needs_gender,
+            }
+
+    return missing_dict
+
+
 def _run_pipeline(file_path, uid):
     """Background thread: runs the full data pipeline with progress tracking."""
     try:
         f_df, n_df, f_step2, n_step2, stats = perform_step1_and_2(file_path, uid, uid=uid)
-        
+
         _set_progress(uid, 5, 'active', 'Validating geographical data completeness...')
-        
-        fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
-        np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
-        
+
+        fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality', 'gender'], find_account_col(f_step2))
+        np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality', 'gender'], find_account_col(n_step2))
+
         has_missing = bool(fp_missing or np_missing)
         total_missing = len(fp_missing) + len(np_missing)
-        
+
         result_info = {
             'unique_id': uid,
             'fonepay_count': len(f_df),
             'nepalpay_count': len(n_df),
         }
-        
+
         if has_missing:
             _set_progress(uid, 5, 'action_required', f'Found {total_missing} records still missing geographical data', extra={**result_info, 'log': f'Unable to resolve Province/District/Municipality for {total_missing} accounts via CBS.'})
-        else:
-            _set_progress(uid, 6, 'active', 'Generating final regulatory report formats...')
-            report = _generate_final_report(uid)
-            result_info['step3_filename'] = report['step3_filename']
-            _set_progress(uid, 6, 'complete', 'Report compiled successfully', extra={**result_info, 'log': 'Aggregated Province, District, Local Level, and Gender into 4 sheets.'})
+            return
+
+        # Merchant data clean → now process MB + Connect IPS for sheet 11
+        _set_progress(uid, 6, 'active', 'Enriching Mobile Banking & Connect IPS users via CBS...')
+        from .processors_users import run_enrichment
+        users_missing, _ = run_enrichment(uid, auto_seed=True)
+
+        if users_missing:
+            _set_progress(
+                uid, 6, 'action_required',
+                f'Found {len(users_missing)} user records missing CBS attributes',
+                extra={**result_info,
+                       'log': f'Need manual review for {len(users_missing)} MB/IPS rows (country_code/gender/DOB).',
+                       'users_missing_count': len(users_missing)},
+            )
+            return
+
+        # Step 7: Pre-enrich payment-detail accounts + check for missing CBS data
+        _set_progress(uid, 7, 'active', 'Validating payment detail geo & gender data via CBS...')
+        pay_missing = _check_payment_detail_missing(uid)
+
+        if pay_missing:
+            _set_progress(
+                uid, 7, 'action_required',
+                f'Found {len(pay_missing)} payment-detail accounts still missing CBS data',
+                extra={**result_info,
+                       'log': f'{len(pay_missing)} accounts need Province/District/Municipality/Gender. Proceed to skip nulls or resolve manually.'},
+            )
+            return
+
+        _set_progress(uid, 8, 'active', 'Generating final regulatory report formats...')
+        report = _generate_final_report(uid)
+        result_info['step3_filename'] = report['step3_filename']
+        _set_progress(uid, 8, 'complete', 'Report compiled successfully', extra={**result_info, 'log': 'Aggregated Province, District, Local Level, Gender and Sheet 11 Users.'})
     except Exception as e:
         _set_progress(uid, -1, 'error', str(e))
     finally:
@@ -896,23 +1094,27 @@ def upload_merchant_data(request):
 # --- API VIEWS ---
 
 def api_start(request):
-    """Accept file, start background pipeline, return unique_id."""
+    """Accept files, start background pipeline, return unique_id."""
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
-    
+
     file = request.FILES.get('file')
     card_data = request.FILES.get('card_data')
     phonepay_details = request.FILES.get('phonepay_details')
     nepalpay_details = request.FILES.get('nepalpay_details')
     cardless_report = request.FILES.get('cardless_report')
+    mobile_banking = request.FILES.get('mobile_banking')
+    connect_ips = request.FILES.get('connect_ips')
 
-    if not file or not card_data or not phonepay_details or not nepalpay_details or not cardless_report:
+    required = [file, card_data, phonepay_details, nepalpay_details, cardless_report,
+                mobile_banking, connect_ips]
+    if not all(required):
         return JsonResponse({'error': 'Please upload all required files.'}, status=400)
-    
+
     uid = str(uuid.uuid4())[:8]
     tmp_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(tmp_dir, exist_ok=True)
-    
+
     def save_file(f, prefix):
         path = os.path.join(tmp_dir, f'{prefix}_{uid}.xlsx')
         with open(path, 'wb') as df:
@@ -925,12 +1127,14 @@ def api_start(request):
     save_file(phonepay_details, 'phonepay')
     save_file(nepalpay_details, 'nepalpay')
     save_file(cardless_report, 'cardless')
-    
+    save_file(mobile_banking, 'mb_users')
+    save_file(connect_ips, 'ips_users')
+
     _set_progress(uid, 0, 'started', 'Pipeline initiated')
-    
+
     t = threading.Thread(target=_run_pipeline, args=(tmp_path, uid), daemon=True)
     t.start()
-    
+
     return JsonResponse({'unique_id': uid})
 
 def api_progress(request, unique_id):
@@ -942,17 +1146,21 @@ def api_progress(request, unique_id):
     return JsonResponse({'step': 0, 'status': 'waiting', 'detail': 'Initializing...'})
 
 def api_finalize(request, unique_id):
-    """Called when user clicks 'Proceed' — generates the final report."""
-    try:
-        _set_progress(unique_id, 6, 'active', 'Generating final report...')
-        report = _generate_final_report(unique_id)
-        _set_progress(unique_id, 6, 'complete', 'Report compiled successfully', extra={
-            'unique_id': unique_id,
-            'step3_filename': report['step3_filename'],
-        })
-        return JsonResponse({'status': 'complete', 'step3_filename': report['step3_filename']})
-    except Exception as e:
-        return JsonResponse({'status': 'error', 'detail': str(e)}, status=500)
+    """Start final report generation in a background thread; caller polls api_progress for completion."""
+    _set_progress(unique_id, 8, 'active', 'Generating final report...')
+    def _run():
+        try:
+            report = _generate_final_report(unique_id)
+            _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
+                'unique_id': unique_id,
+                'step3_filename': report['step3_filename'],
+            })
+        except Exception as e:
+            _set_progress(unique_id, -1, 'error', str(e))
+        finally:
+            connection.close()
+    threading.Thread(target=_run, daemon=True).start()
+    return JsonResponse({'status': 'pending'})
 
 
 # --- LEGACY VIEWS (review, apply, finalize page, download) ---
@@ -984,6 +1192,8 @@ def review_missing_data(request, unique_id):
         'missing_records': all_missing,
         'provinces_list': provinces_list,
         'districts_list': districts_list,
+        'local_cats': local_cats,
+        'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
     })
 
 def apply_manual_mapping(request, unique_id):
@@ -997,12 +1207,12 @@ def apply_manual_mapping(request, unique_id):
         f_acc_col = find_account_col(f_step2)
         n_acc_col = find_account_col(n_step2)
         
+        col_map = {'prov': 'province', 'dist': 'district', 'muni': 'municipality', 'gender': 'gender'}
         updates = {}
         for key, val in request.POST.items():
             if val and str(val).strip() and val != 'Ignore':
                 parts = key.split('_', 1)
-                if len(parts) == 2 and parts[0] in ['prov', 'dist', 'muni']:
-                    col_map = {'prov': 'province', 'dist': 'district', 'muni': 'municipality'}
+                if len(parts) == 2 and parts[0] in col_map:
                     col = col_map[parts[0]]
                     acc = parts[1]
                     if acc not in updates: updates[acc] = {}
@@ -1020,10 +1230,17 @@ def apply_manual_mapping(request, unique_id):
             
         f_step2 = patch_df(f_step2, f_acc_col)
         n_step2 = patch_df(n_step2, n_acc_col)
-        
+
         f_step2.to_excel(f_path2, index=False)
         n_step2.to_excel(n_path2, index=False)
-        
+
+        # Persist user fills into CleanCBS — never into the bank's CBSMerchant
+        for acc, fields in updates.items():
+            clean_obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
+            for col, val in fields.items():
+                setattr(clean_obj, col, val)
+            clean_obj.save()
+
         messages.success(request, 'Successfully applied manual data mappings!')
         return redirect('finalize_report', unique_id=unique_id)
     return redirect('upload_merchant_data')
@@ -1074,3 +1291,146 @@ def download_sheet(request, filename):
         return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=filename)
     else:
         raise Http404("File not found")
+
+
+# --- Sheet 11 Users Review (Option B: separate review page) ---
+
+def users_review(request, unique_id):
+    """Render manual-review form for MB/IPS rows whose CBS lookup was incomplete."""
+    from .processors_users import load_rows, collect_missing
+    from .country_codes import COUNTRY_CODE_MAP
+
+    rows = load_rows(unique_id)
+    if rows is None:
+        raise Http404("Users data not found for this session.")
+
+    missing = collect_missing(rows)
+    if not missing:
+        return redirect('finalize_report', unique_id=unique_id)
+
+    country_choices = sorted(COUNTRY_CODE_MAP.items())
+    return render(request, 'merchant/review_missing_users.html', {
+        'unique_id': unique_id,
+        'missing_records': missing,
+        'country_choices': country_choices,
+        'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
+    })
+
+
+def users_apply(request, unique_id):
+    """Accept user-filled values for MB/IPS missing records, persist, proceed."""
+    if request.method != 'POST':
+        return redirect('users_review', unique_id=unique_id)
+
+    from .processors_users import load_rows, save_rows, collect_missing
+
+    rows = load_rows(unique_id)
+    if rows is None:
+        raise Http404("Users data not found for this session.")
+
+    # Inputs are keyed by row index: cc_<idx>, g_<idx>, dob_<idx>
+    for key, raw in request.POST.items():
+        if not raw:
+            continue
+        val = str(raw).strip()
+        if not val:
+            continue
+        if '_' not in key:
+            continue
+        prefix, idx_str = key.split('_', 1)
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            continue
+        if idx < 0 or idx >= len(rows):
+            continue
+        r = rows[idx]
+        if prefix == 'cc' and not r.get('country_code'):
+            r['country_code'] = val
+        elif prefix == 'g' and not r.get('gender'):
+            r['gender'] = val
+        elif prefix == 'dob' and not r.get('dob'):
+            try:
+                r['dob'] = datetime.strptime(val, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+
+    save_rows(unique_id, rows)
+
+    still_missing = collect_missing(rows)
+    if still_missing:
+        messages.warning(request, f'{len(still_missing)} record(s) still incomplete — please fill all fields.')
+        return redirect('users_review', unique_id=unique_id)
+
+    messages.success(request, 'Manual user data applied. Generating final report...')
+    # Kick the final report generation now that sheet-11 data is complete.
+    _generate_final_report(unique_id)
+    _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
+        'unique_id': unique_id,
+        'step3_filename': f'Additional_Payment_Report_ASCII_{unique_id}.xlsx',
+    })
+    return redirect('finalize_report', unique_id=unique_id)
+
+
+# --- Payment Detail Missing Data Review ---
+
+def payment_detail_review(request, unique_id):
+    """Show missing province/district/municipality/gender for payment-detail accounts."""
+    missing = _check_payment_detail_missing(unique_id)
+    if not missing:
+        return redirect('finalize_report', unique_id=unique_id)
+
+    missing_list = []
+    for idx, (acc, info) in enumerate(missing.items()):
+        missing_list.append({**info, 'idx': idx})
+
+    return render(request, 'merchant/review_missing_payment.html', {
+        'unique_id': unique_id,
+        'missing_records': missing_list,
+        'provinces_list': provinces_list,
+        'districts_list': districts_list,
+        'local_cats': local_cats,
+        'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
+    })
+
+
+def payment_detail_apply(request, unique_id):
+    """Save user-entered values for payment-detail missing accounts into CBS, then finalize."""
+    if request.method != 'POST':
+        return redirect('payment_detail_review', unique_id=unique_id)
+
+    # Re-compute missing so we know which accounts and which fields need filling
+    missing = _check_payment_detail_missing(unique_id)
+    missing_list = list(missing.items())
+
+    updates = {}  # acc → {field: value}
+    for key, raw in request.POST.items():
+        if not raw or not str(raw).strip():
+            continue
+        val = str(raw).strip()
+        # Keys are like: prov_<idx>, dist_<idx>, muni_<idx>, gender_<idx>
+        for prefix, col in [('prov', 'province'), ('dist', 'district'), ('muni', 'municipality'), ('gender', 'gender')]:
+            if key.startswith(f'{prefix}_'):
+                try:
+                    idx = int(key[len(prefix)+1:])
+                except ValueError:
+                    continue
+                if idx < 0 or idx >= len(missing_list):
+                    continue
+                acc = missing_list[idx][0]
+                updates.setdefault(acc, {})[col] = val
+
+    # Write user fills to CleanCBS — never to the bank's CBSMerchant
+    for acc, fields in updates.items():
+        clean_obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
+        for col, val in fields.items():
+            setattr(clean_obj, col, val)
+        clean_obj.save()
+
+    # Generate the final report now (skipped/empty gender → Company; skipped geo fields → excluded from geo totals)
+    report = _generate_final_report(unique_id)
+    _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
+        'unique_id': unique_id,
+        'step3_filename': report['step3_filename'],
+    })
+    return redirect('finalize_report', unique_id=unique_id)

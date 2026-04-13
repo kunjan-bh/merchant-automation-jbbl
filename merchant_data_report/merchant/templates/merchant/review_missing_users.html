@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Missing User Data (Sheet 11)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-bg: #f9fafb;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --accent-color: #3b82f6;
+            --accent-hover: #2563eb;
+            --border-color: #e5e7eb;
+            --warn-bg: #fef3c7;
+            --warn-text: #92400e;
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--primary-bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            background: var(--card-bg);
+            width: 100%;
+            max-width: 1200px;
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: var(--shadow-lg);
+        }
+        h2 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .sub { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.95rem; }
+        .notice {
+            background: var(--warn-bg);
+            color: var(--warn-text);
+            padding: 0.9rem 1.2rem;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        .msgs { margin-bottom: 1rem; }
+        .msg {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+        }
+        .msg.warning { background: #fef3c7; color: #92400e; }
+        .msg.success { background: #d1fae5; color: #065f46; }
+        .table-wrap {
+            max-height: 60vh;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+        th, td { padding: 0.75rem 0.9rem; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th {
+            background: var(--primary-bg);
+            position: sticky;
+            top: 0;
+            font-weight: 600;
+            z-index: 10;
+        }
+        tr:last-child td { border-bottom: none; }
+        .source-badge {
+            display: inline-block;
+            padding: 0.15rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .source-badge.MB { background: #dbeafe; color: #1e40af; }
+        .source-badge.IPS { background: #fce7f3; color: #9f1239; }
+        select, input[type="date"] {
+            width: 100%;
+            padding: 0.45rem 0.6rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.85rem;
+            background: white;
+            font-family: inherit;
+        }
+        select:focus, input[type="date"]:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        td.filled { color: var(--text-muted); font-size: 0.82rem; }
+        .actions {
+            margin-top: 1.5rem;
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+        }
+        button {
+            padding: 0.75rem 1.8rem;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s;
+        }
+        .btn-primary {
+            background: var(--accent-color);
+            color: white;
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .account {
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            font-size: 0.82rem;
+            color: var(--text-main);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Review Missing User Data</h2>
+        <p class="sub">Some Mobile Banking / Connect IPS accounts couldn't be fully resolved from CBS. Fill in the missing fields below to proceed with Sheet 11 (Digital Channel Users).</p>
+
+        {% if messages %}
+        <div class="msgs">
+            {% for message in messages %}
+            <div class="msg {{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="notice">
+            {{ missing_records|length }} record(s) need attention. Fields left blank below will stay unresolved and those rows will be excluded from Sheet 11 totals.
+        </div>
+
+        <form method="post" action="{% url 'users_apply' unique_id %}">
+            {% csrf_token %}
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th>Account Number</th>
+                            <th style="width: 180px;">Country Code</th>
+                            <th style="width: 160px;">Gender</th>
+                            <th style="width: 170px;">DOB</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in missing_records %}
+                        <tr>
+                            <td><span class="source-badge {{ row.source }}">{{ row.source }}</span></td>
+                            <td class="account">{{ row.account }}</td>
+                            <td>
+                                {% if row.needs_country_code %}
+                                <select name="cc_{{ row.idx }}">
+                                    <option value="">-- select --</option>
+                                    {% for code, label in country_choices %}
+                                    <option value="{{ code }}">{{ code }} — {{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <span class="filled">{{ row.country_code }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.needs_gender %}
+                                <select name="g_{{ row.idx }}">
+                                    <option value="">-- select --</option>
+                                    {% for code, label in gender_choices %}
+                                    <option value="{{ code }}">{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <span class="filled">{{ row.gender }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.needs_dob %}
+                                <input type="date" name="dob_{{ row.idx }}" max="2025-12-31">
+                                {% else %}
+                                <span class="filled">{{ row.dob }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn-primary">Apply &amp; Generate Report</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

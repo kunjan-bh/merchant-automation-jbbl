@@ -311,6 +311,14 @@
                 <label>Report 50 (Cardless Report)</label>
                 <input type="file" name="cardless_report" id="cardlessReportInput" accept=".xlsx,.xls" required>
             </div>
+            <div class="file-group">
+                <label>Mobile Banking Users Data</label>
+                <input type="file" name="mobile_banking" id="mobileBankingInput" accept=".xlsx,.xls,.csv" required>
+            </div>
+            <div class="file-group">
+                <label>Connect IPS Users Data</label>
+                <input type="file" name="connect_ips" id="connectIpsInput" accept=".xlsx,.xls,.csv" required>
+            </div>
 
             <button type="submit" class="btn-go" id="goBtn">
                 Proceed
@@ -465,13 +473,17 @@
         "Filtering required columns for Fonepay & Nepal Pay",
         "Querying Core Banking System for account details",
         "Enriching merchant records with CBS data",
-        "Validating geographical data completeness",
+        "Validating merchant geographical data completeness",
+        "Enriching Mobile Banking & Connect IPS users via CBS",
+        "Validating payment detail geo & gender data via CBS",
         "Compiling final regulatory report formats"
     ];
+    const TOTAL_STEPS = 8;
 
     const tlList = document.getElementById('tlList');
     
     function createStepHTML(id, label, isLast) {
+        const hasActions = (id === 5 || id === 6 || id === 7);
         return `
         <div class="cv-step" id="step-${id}">
             <div class="cv-icon-wrapper" id="iconWrap-${id}">
@@ -481,10 +493,10 @@
             <div class="cv-content">
                 <div class="cv-title" id="title-${id}">${label}</div>
                 <div class="cv-log" id="log-${id}" style="display: none; margin-top: 6px; font-size: 0.8rem; color: var(--text-dim); background: #f8fafc; padding: 6px 10px; border-left: 2px solid var(--border); border-radius: 0 4px 4px 0; font-family: monospace;"></div>
-                ${id === 5 ? `
-                <div class="tl-actions" id="actionBtns">
-                    <button class="btn-sm primary" id="btnProceed">Proceed without data</button>
-                    <button class="btn-sm gray" id="btnResolve">Resolve manually</button>
+                ${hasActions ? `
+                <div class="tl-actions" id="actionBtns-${id}">
+                    <button class="btn-sm primary" id="btnProceed-${id}">Proceed without data</button>
+                    <button class="btn-sm gray" id="btnResolve-${id}">Resolve manually</button>
                 </div>` : ''}
             </div>
         </div>`;
@@ -492,8 +504,8 @@
 
     function initTimeline() {
         tlList.innerHTML = '';
-        for(let i=1; i<=6; i++) {
-            tlList.innerHTML += createStepHTML(i, stepLabels[i-1], i===6);
+        for(let i=1; i<=TOTAL_STEPS; i++) {
+            tlList.innerHTML += createStepHTML(i, stepLabels[i-1], i===TOTAL_STEPS);
         }
     }
 
@@ -501,6 +513,21 @@
     const form = document.getElementById('uploadForm');
     const goBtn = document.getElementById('goBtn');
     let uid = null, pollTimer = null;
+
+    // Resume mode: arrived here from the review page after clicking "Cancel & Proceed"
+    const _resumeUid = new URLSearchParams(window.location.search).get('resume');
+    if (_resumeUid) {
+        uid = _resumeUid;
+        document.getElementById('idleState').style.display = 'none';
+        document.getElementById('timelineContainer').classList.add('show');
+        initTimeline();
+        // Mark steps 1-7 as done, step 8 as active immediately
+        for (let i = 1; i <= 7; i++) setStepState(i, 'done');
+        setStepState(8, 'active', 'Generating final report…');
+        pollTimer = setInterval(pollProgress, 800);
+        // Clean URL without reloading so the back button works
+        history.replaceState(null, '', '/');
+    }
 
     if (form) {
         form.addEventListener('submit', function(e) {
@@ -511,10 +538,14 @@
             const phonepayDetailsInput = document.getElementById('phonepayDetailsInput');
             const nepalpayDetailsInput = document.getElementById('nepalpayDetailsInput');
             const cardlessReportInput = document.getElementById('cardlessReportInput');
+            const mobileBankingInput = document.getElementById('mobileBankingInput');
+            const connectIpsInput = document.getElementById('connectIpsInput');
 
-            if (!fileInput.files.length || !cardDataInput.files.length || !phonepayDetailsInput.files.length || !nepalpayDetailsInput.files.length || !cardlessReportInput.files.length) { 
-                alert('Please select all required files.'); 
-                return; 
+            if (!fileInput.files.length || !cardDataInput.files.length || !phonepayDetailsInput.files.length
+                || !nepalpayDetailsInput.files.length || !cardlessReportInput.files.length
+                || !mobileBankingInput.files.length || !connectIpsInput.files.length) {
+                alert('Please select all required files.');
+                return;
             }
             
             goBtn.disabled = true; 
@@ -567,8 +598,7 @@
             wrap.innerHTML = iconSpinner;
             if(!title.innerHTML.includes('badge')) title.innerHTML += `<span class="status-badge icon-spinner" style="border-radius:50%; width:10px; height:10px; padding:0; display:inline-block; margin-left:6px; background:var(--blue);"></span>`;
         } else if (state === 'done') {
-            wrap.innerHTML = num === 6 ? iconCheck : iconDoc; // use doc icon for history, check for final
-            if(num < 6) wrap.innerHTML = iconDoc; // clean file icon for completed reading steps
+            wrap.innerHTML = (num === TOTAL_STEPS) ? iconCheck : iconDoc; // check for final, doc otherwise
             title.innerHTML = stepLabels[num-1]; // remove badge
         } else if (state === 'warn') {
             wrap.innerHTML = iconWarn;
@@ -590,32 +620,44 @@
         }
         else if (status === 'action_required') {
             clearInterval(pollTimer);
-            setStepState(5, 'warn', logText);
-            document.getElementById('actionBtns').classList.add('show');
+            setStepState(step, 'warn', logText);
+            const actionBox = document.getElementById('actionBtns-' + step);
+            if (actionBox) actionBox.classList.add('show');
             document.getElementById('timelineSub').textContent = 'Waiting for user input.';
-            
-            document.getElementById('btnProceed').onclick = function() {
-                // User said "proceed" -> continue
-                document.getElementById('actionBtns').classList.remove('show');
-                setStepState(5, 'done', 'Ignored missing data. Proceeding...');
-                document.getElementById('timelineSub').textContent = 'Executing automated reporting pipeline...';
-                
-                setTimeout(() => {
-                    setStepState(6, 'active');
-                    fetch('/api/finalize/' + uid + '/').then(r=>r.json()).then(res => {
-                        if(res.status === 'complete') {
-                            setStepState(6, 'done', res.log || 'Aggregated all data successfully.');
-                            setTimeout(() => { window.location.href = '/finalize/' + uid + '/'; }, 1000);
-                        } else alert('Error: ' + res.detail);
-                    });
-                }, 500);
-            };
-            document.getElementById('btnResolve').onclick = () => window.location.href = '/review/' + uid + '/';
+
+            let reviewUrl;
+            if (step === 6) reviewUrl = '/users-review/' + uid + '/';
+            else if (step === 7) reviewUrl = '/payment-review/' + uid + '/';
+            else reviewUrl = '/review/' + uid + '/';
+
+            const proceedBtn = document.getElementById('btnProceed-' + step);
+            if (proceedBtn) {
+                proceedBtn.onclick = function() {
+                    if (actionBox) actionBox.classList.remove('show');
+                    setStepState(step, 'done', 'Ignored missing data. Proceeding...');
+                    document.getElementById('timelineSub').textContent = 'Executing automated reporting pipeline...';
+
+                    setTimeout(() => {
+                        setStepState(TOTAL_STEPS, 'active');
+                        fetch('/api/finalize/' + uid + '/')
+                            .then(r => r.json())
+                            .then(res => {
+                                if (res.status === 'error') { alert('Error: ' + res.detail); return; }
+                                // Report is generating in the background — resume polling
+                                pollTimer = setInterval(pollProgress, 800);
+                            });
+                    }, 500);
+                };
+            }
+            const resolveBtn = document.getElementById('btnResolve-' + step);
+            if (resolveBtn) {
+                resolveBtn.onclick = () => window.location.href = reviewUrl;
+            }
         }
         else if (status === 'complete') {
             clearInterval(pollTimer);
-            for (let i = 1; i <= 6; i++) setStepState(i, 'done');
-            document.getElementById(`iconWrap-6`).innerHTML = iconCheck; // Last step checkmark
+            for (let i = 1; i <= TOTAL_STEPS; i++) setStepState(i, 'done');
+            document.getElementById(`iconWrap-${TOTAL_STEPS}`).innerHTML = iconCheck; // Last step checkmark
             document.getElementById('timelineSub').textContent = 'Done.';
             setTimeout(() => { window.location.href = '/finalize/' + uid + '/'; }, 800);
         }

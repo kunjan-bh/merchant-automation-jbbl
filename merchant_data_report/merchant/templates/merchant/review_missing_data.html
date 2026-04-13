@@ -162,7 +162,8 @@
                             <th>Address 2</th>
                             <th style="width: 150px;">Province</th>
                             <th style="width: 150px;">District</th>
-                            <th style="width: 180px;">Municipality</th>
+                            <th style="width: 180px;">Municipality Type</th>
+                            <th style="width: 130px;">Gender</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -206,7 +207,26 @@
                             <!-- Municipality Column -->
                             <td>
                                 {% if row.needs_municipality %}
-                                <input type="text" name="muni_{{ row.account_number }}" placeholder="e.g. Kathmandu MC">
+                                <select name="muni_{{ row.account_number }}">
+                                    <option value="Ignore">-- Leave Null --</option>
+                                    {% for cat in local_cats %}
+                                    <option value="{{ cat }}">{{ cat }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% else %}
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                {% endif %}
+                            </td>
+
+                            <!-- Gender Column -->
+                            <td>
+                                {% if row.needs_gender %}
+                                <select name="gender_{{ row.account_number }}">
+                                    <option value="Ignore">-- Leave Null --</option>
+                                    {% for code, label in gender_choices %}
+                                    <option value="{{ code }}">{{ label }}</option>
+                                    {% endfor %}
+                                </select>
                                 {% else %}
                                 <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
                                 {% endif %}
@@ -214,7 +234,7 @@
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="6" style="text-align: center; padding: 3rem; color: var(--text-muted);">
+                            <td colspan="7" style="text-align: center; padding: 3rem; color: var(--text-muted);">
                                 No missing data found!
                             </td>
                         </tr>
@@ -224,10 +244,24 @@
             </div>
 
             <div style="display: flex; gap: 1rem; margin-top: 2rem; justify-content: flex-end; align-items: center;">
-                <a href="{% url 'finalize_report' unique_id %}" style="color: var(--text-muted); text-decoration: none; font-weight: 500; font-size: 0.95rem;">Cancel & Proceed Without Updates</a>
+                <button type="button" id="btnCancel" onclick="proceedWithoutUpdates()" style="background:none; border:none; color: var(--text-muted); font-weight: 500; font-size: 0.95rem; cursor:pointer; padding:0;">Cancel &amp; Proceed Without Updates</button>
                 <button type="submit" class="btn-submit">Apply Mappings</button>
             </div>
         </form>
     </div>
+
+<script>
+function proceedWithoutUpdates() {
+    const btn = document.getElementById('btnCancel');
+    btn.disabled = true;
+    btn.textContent = 'Going back…';
+    // Fire the finalize job then immediately return to the main page.
+    // The pipeline animation there will show step 8 progress and redirect when done.
+    fetch('/api/finalize/{{ unique_id }}/')
+        .finally(() => {
+            window.location.href = '/?resume={{ unique_id }}';
+        });
+}
+</script>
 </body>
 </html>
