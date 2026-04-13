@@ -6,7 +6,7 @@ class CBSMerchant(models.Model):
     district = models.CharField(max_length=100, verbose_name="District")
     municipality = models.CharField(max_length=100, verbose_name="Municipality")
     address_1 = models.CharField(max_length=255, verbose_name="Address 1")
-    address_2 = models.CharField(max_length=255, blank=True, null=True, verbose_name="Address 2")
+    address_3 = models.CharField(max_length=255, blank=True, null=True, verbose_name="Address 3")
 
     GENDER_CHOICES = [
         ('M', 'Male'),
@@ -33,7 +33,7 @@ class CleanCBS(models.Model):
     district = models.CharField(max_length=100, blank=True, null=True, verbose_name="District")
     municipality = models.CharField(max_length=100, blank=True, null=True, verbose_name="Municipality")
     address_1 = models.CharField(max_length=255, blank=True, null=True, verbose_name="Address 1")
-    address_2 = models.CharField(max_length=255, blank=True, null=True, verbose_name="Address 2")
+    address_3 = models.CharField(max_length=255, blank=True, null=True, verbose_name="Address 3")
 
     GENDER_CHOICES = [
         ('M', 'Male'),

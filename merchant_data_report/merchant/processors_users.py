@@ -2,7 +2,7 @@
 Sheet 11 (Users) pipeline.
 
 Inputs: Mobile Banking xlsx/csv + Connect IPS xlsx/csv
-Enrichment: CBSMerchant table (dob, gender, country_code)
+Enrichment: CBS data source (dob, gender, country_code) via cbs_source.cbs_lookup()
 Output: adds an '11.Users' sheet to the writer's workbook
 
 Flow used by views.py:
@@ -23,7 +23,8 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from django.conf import settings
 
-from .models import CBSMerchant, CleanCBS
+from .models import CleanCBS
+from .cbs_source import cbs_lookup
 from .country_codes import (
     COUNTRY_CODE_MAP,
     NATIONALITY_ROWS,
@@ -134,60 +135,45 @@ def _chunked(seq, size=_SQL_CHUNK):
 
 
 def _seed_missing_cbs(accounts):
-    """For any account not in CBSMerchant, create a synthetic record.
-
-    The country_code distribution is biased toward 01 (Nepalese). Keeps
-    sheet-11 testable without a real CBS connection. Existing records are
-    never overwritten. Chunked to stay under SQLite's IN-clause parameter cap.
     """
-    existing = set()
-    for chunk in _chunked(accounts):
-        existing.update(
-            CBSMerchant.objects.filter(account_number__in=chunk)
-            .values_list('account_number', flat=True)
-        )
-    to_create = [a for a in accounts if a and a not in existing]
-    if not to_create:
-        return 0
-    new_rows = []
-    for acc in to_create:
-        new_rows.append(CBSMerchant(
-            account_number=acc,
-            province='',
-            district='',
-            municipality='',
-            address_1='',
-            address_2='',
-            gender=random.choice(['M', 'F', 'O']),
-            dob=_random_dob(),
-            country_code=random.choices(['01', '11', '41'], weights=[85, 10, 5])[0],
-        ))
-    for chunk in _chunked(new_rows):
-        CBSMerchant.objects.bulk_create(chunk, ignore_conflicts=True)
-    return len(new_rows)
+    No-op. CBSMerchant is populated exclusively from the real CBS export
+    (load_cbs_excel management command). Synthetic records are never injected.
+    Accounts absent from CBS are flagged for manual input at review time.
+    """
+    return 0
 
 
 def _ensure_clean_cbs_users(accounts):
-    """Copy CBSMerchant data into CleanCBS for any accounts not yet there.
-    All DB queries are chunked to stay under SQLite's IN-clause variable limit."""
+    """
+    Sync CBS data into CleanCBS for the given accounts.
+    Only accounts known to CBS get a CleanCBS record — no empty shells.
+    Uses cbs_lookup() so this is ready for the API swap.
+    """
+    accs = [a for a in accounts if a and str(a).strip()]
+    if not accs:
+        return
+
     existing = set()
-    for chunk in _chunked(accounts):
+    for chunk in _chunked(accs):
         existing.update(CleanCBS.objects.filter(account_number__in=chunk).values_list('account_number', flat=True))
-    new_accs = [a for a in accounts if a not in existing]
+
+    new_accs = [a for a in accs if a not in existing]
     if not new_accs:
         return
-    cbs_map = {}
-    for chunk in _chunked(new_accs):
-        for r in CBSMerchant.objects.filter(account_number__in=chunk):
-            cbs_map[r.account_number] = r
+
+    # Single CBS source call — swap cbs_lookup() for API when ready
+    cbs_map = cbs_lookup(new_accs)
+
     to_create = []
     for acc in new_accs:
-        cbs = cbs_map.get(acc)
+        r = cbs_map.get(acc)
+        if not r:
+            continue   # not in CBS → skip, will appear in manual review
         to_create.append(CleanCBS(
             account_number=acc,
-            gender=cbs.gender if cbs else '',
-            dob=cbs.dob if cbs else None,
-            country_code=cbs.country_code if cbs else '01',
+            gender=r['gender'] or '',
+            dob=r['dob'],
+            country_code=r['country_code'],
         ))
     for chunk in _chunked(to_create):
         CleanCBS.objects.bulk_create(chunk, ignore_conflicts=True)

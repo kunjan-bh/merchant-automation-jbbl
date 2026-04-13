@@ -13,12 +13,20 @@ import threading
 import re
 from datetime import date, datetime, timedelta
 from .models import CBSMerchant, CleanCBS
+from .cbs_source import cbs_lookup, cbs_accounts_in_set, normalize_cbs_record
 from .country_codes import calculate_age as _calculate_age
 
 # --- HELPER FUNCTIONS ---
 
 def is_empty(val):
     return pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'null'
+
+def is_valid_account_number(acc):
+    """Valid CBS account: all digits, at least 15 characters. Rejects names, phone numbers, etc."""
+    if not acc:
+        return False
+    s = str(acc).strip()
+    return s.isdigit() and len(s) >= 15
 
 def filter_dataframe(df, requested_cols):
     cols_to_keep = []
@@ -69,8 +77,8 @@ def check_missing_records(df, required_cols, index_col):
             if acc not in missing_dict:
                 missing_dict[acc] = {
                     'account_number': acc,
-                    'address_1': str(row.get('address_1', '')),
-                    'address_2': str(row.get('address_2', '')),
+                    'address_1': '',  # overwritten from DB in review_missing_data
+                    'address_3': '',  # overwritten from DB in review_missing_data
                     'needs_province': 'province' in missing,
                     'needs_district': 'district' in missing,
                     'needs_municipality': 'municipality' in missing,
@@ -84,27 +92,105 @@ def check_missing_records(df, required_cols, index_col):
 # --- MAPPERS ---
 
 provinces_list = ['Koshi', 'Madhesh', 'Bagmati', 'Gandaki', 'Lumbini', 'Karnali', 'Sudurpaschim']
+
+# Maps every known province code/name variant → canonical name.
+# Handles: 3-digit CBS codes, 1/2-digit short codes, 'State-N' (FonePay payment files),
+# 'Province N' / 'N Province' / 'X Province' / 'X Pradesh' formats (NepalPay files),
+# spelling variants (Sudurpashchim, MADHEDH PRADESH, BR), and clean full names.
+_PROVINCE_MAP = {
+    # 3-digit CBS codes
+    '001': 'Koshi',        '007': 'Sudurpaschim',
+    '002': 'Madhesh',      '006': 'Karnali',
+    '003': 'Bagmati',      '005': 'Lumbini',
+    '004': 'Gandaki',
+    # 2-digit variants
+    '01': 'Koshi',  '02': 'Madhesh',  '03': 'Bagmati',  '04': 'Gandaki',
+    '05': 'Lumbini', '06': 'Karnali', '07': 'Sudurpaschim',
+    # 1-digit variants
+    '1': 'Koshi',  '2': 'Madhesh',  '3': 'Bagmati',  '4': 'Gandaki',
+    '5': 'Lumbini', '6': 'Karnali', '7': 'Sudurpaschim',
+    # Full lowercase names (CBS / manual input)
+    'koshi': 'Koshi',        'madhesh': 'Madhesh',
+    'bagmati': 'Bagmati',    'gandaki': 'Gandaki',
+    'lumbini': 'Lumbini',    'karnali': 'Karnali',
+    'sudurpaschim': 'Sudurpaschim',
+    # Spelling variants
+    'sudurpashchim': 'Sudurpaschim',  # NepalPay spelling
+    'madhedhpradesh': 'Madhesh',       # CBS typo
+    'madheshpradesh': 'Madhesh',
+    # 'State-N' format used by FonePay payment detail files
+    'state-1': 'Koshi',   'state-2': 'Madhesh',  'state-3': 'Bagmati',
+    'state-4': 'Gandaki', 'state-5': 'Lumbini',  'state-6': 'Karnali',
+    'state-7': 'Sudurpaschim',
+    # 'Province N' format (NepalPay main file)
+    'province1': 'Koshi',   'province2': 'Madhesh',  'province3': 'Bagmati',
+    'province4': 'Gandaki', 'province5': 'Lumbini',  'province6': 'Karnali',
+    'province7': 'Sudurpaschim',
+}
+
 def map_province(p):
-    if pd.isna(p) or str(p).strip() == '': return 'Unmatched'
-    p_norm = str(p).lower().replace(' ', '').replace('_', '')
-    if '1' in p_norm or 'koshi' in p_norm: return 'Koshi'
-    if '2' in p_norm or 'madh' in p_norm: return 'Madhesh'
-    if '3' in p_norm or 'bagm' in p_norm: return 'Bagmati'
-    if '4' in p_norm or 'gand' in p_norm: return 'Gandaki'
-    if '5' in p_norm or 'lumb' in p_norm: return 'Lumbini'
-    if '6' in p_norm or 'karn' in p_norm: return 'Karnali'
-    if '7' in p_norm or 'sudur' in p_norm or 'sughar' in p_norm: return 'Sudurpaschim'
+    if pd.isna(p) or str(p).strip() == '' or str(p).strip().upper() == 'NULL':
+        return 'Unmatched'
+    p_str = str(p).strip()
+    # 1. Exact lookup
+    result = _PROVINCE_MAP.get(p_str)
+    if result: return result
+    # 2. Lowercase lookup (handles 'Koshi', 'STATE-3', 'Province3', etc.)
+    result = _PROVINCE_MAP.get(p_str.lower())
+    if result: return result
+    # 3. Strip spaces/hyphens then look up ('State-3' → 'state3', 'Province 3' → 'province3')
+    p_compact = re.sub(r'[\s\-]', '', p_str.lower())
+    result = _PROVINCE_MAP.get(p_compact)
+    if result: return result
+    # 4. Strip trailing ' Province' / ' Pradesh' suffix ('Bagmati Province' → 'bagmati')
+    p_lower = p_str.lower()
+    for suffix in (' province', ' pradesh'):
+        if p_lower.endswith(suffix):
+            base = p_lower[:-len(suffix)].strip()
+            result = _PROVINCE_MAP.get(base)
+            if result: return result
+    # 5. Last resort: extract the single province number 1-7
+    m = re.search(r'\b([1-7])\b', p_str)
+    if m:
+        return _PROVINCE_MAP.get(m.group(1), 'Unmatched')
     return 'Unmatched'
 
 districts_list = [
-    "Bhojpur District", "Dhankuta District", "Ilam District", "Jhapa District", "Khotang District", "Morang District", "Okhaldhunga District", "Panchthar District", "Sankhuwasabha District", "Solukhumbu District", "Sunsari District", "Taplejung District", "Tehrathum District", "Udayapur District", "Bara District", "Parsa District", "Rautahat District", "Sarlahi District", "Dhanusha District", "Siraha District", "Mahottari District", "Saptari District", "Sindhuli District", "Ramechhap District", "Dolakha District", "Bhaktapur District", "Dhading District", "Kathmandu District", "Kavrepalanchok District", "Lalitpur District", "Nuwakot District", "Rasuwa District", "Sindhupalchok District", "Chitwan District", "Makwanpur District", "Baglung District", "Gorkha District", "Kaski District", "Lamjung District", "Manang District", "Mustang District", "Myagdi District", "Nawalpur District", "Parbat District", "Syangja District", "Tanahun District", "Arghakhanchi District", "Gulmi District", "Kapilvastu District", "Parasi District", "Palpa District", "Rupandehi District", "Banke District", "Bardiya District", "Dang District", "Pyuthan District", "Rolpa District", "Rukum East District", "Dailekh District", "Dolpa District", "Humla District", "Jajarkot District", "Jumla District", "Kalikot District", "Mugu District", "Rukum West District", "Surkhet District", "Achham District", "Baitadi District", "Bajhang District", "Bajura District", "Dadeldhura District", "Darchula District", "Doti District", "Kailali District", "Kanchanpur District"
+    "Bhojpur District", "Dhankuta District", "Ilam District", "Jhapa District", "Khotang District", "Morang District", "Okhaldhunga District", "Panchthar District", "Sankhuwasabha District", "Solukhumbu District", "Sunsari District", "Taplejung District", "Tehrathum District", "Udayapur District", "Bara District", "Parsa District", "Rautahat District", "Sarlahi District", "Dhanusha District", "Siraha District", "Mahottari District", "Saptari District", "Sindhuli District", "Ramechhap District", "Dolakha District", "Bhaktapur District", "Dhading District", "Kathmandu District", "Kavrepalanchok District", "Lalitpur District", "Nuwakot District", "Rasuwa District", "Sindhupalchok District", "Chitwan District", "Makwanpur District", "Baglung District", "Gorkha District", "Kaski District", "Lamjung District", "Manang District", "Mustang District", "Myagdi District", "Nawalpur District", "Parbat District", "Syangja District", "Tanahun District", "Arghakhanchi District", "Gulmi District", "Kapilvastu District", "Parasi District", "Palpa District", "Rupandehi District", "Banke District", "Bardiya District", "Dang District", "Pyuthan District", "Rolpa District", "Rukum East District", "Dailekh District", "Dolpa District", "Humla District", "Jajarkot District", "Jumla District", "Kalikot District", "Mugu District", "Rukum West District", "Salyan District", "Surkhet District", "Achham District", "Baitadi District", "Bajhang District", "Bajura District", "Dadeldhura District", "Darchula District", "Doti District", "Kailali District", "Kanchanpur District"
 ]
+
+# CBS / NepalPay spelling variants → canonical NRB spelling (without ' District' suffix).
+_DISTRICT_ALIAS = {
+    'chitawan':       'Chitwan',
+    'dhanakuta':      'Dhankuta',
+    'gorakha':        'Gorkha',
+    'kapilbastu':     'Kapilvastu',
+    'kavre':          'Kavrepalanchok',
+    'kavrepalanchowk':'Kavrepalanchok',
+    'mahotari':       'Mahottari',
+    'makawanpur':     'Makwanpur',
+    'nawalparasi':    'Nawalpur',   # Eastern half after 2015 split; best single mapping
+    'panchathar':     'Panchthar',
+    'rukum':          'Rukum East', # Ambiguous pre-split name; default to East
+    'sindhupalchowk': 'Sindhupalchok',
+    'sindhupalchok':  'Sindhupalchok',
+    'sunasari':       'Sunsari',
+    'terhathum':      'Tehrathum',
+    'western rukum':  'Rukum West',
+}
+
 def map_district(d):
     if pd.isna(d) or str(d).strip() == '': return 'Unmatched'
     d_str = str(d).strip().title()
     if not d_str.endswith(" District"): d_str += " District"
-    if d_str not in districts_list: return 'Unmatched'
-    return d_str
+    if d_str in districts_list: return d_str
+    # Try CBS/NepalPay spelling alias
+    base_lower = d_str.replace(' District', '').lower()
+    alias = _DISTRICT_ALIAS.get(base_lower)
+    if alias:
+        aliased = alias + ' District'
+        if aliased in districts_list: return aliased
+    return 'Unmatched'
 
 local_cats = ['MP', 'MC', 'Sub MP', 'RM']
 def map_local(m):
@@ -182,73 +268,81 @@ def _random_dob(min_age=18, max_age=70):
 
 
 def generate_mock_data(all_accounts, nepalpay_accs=None, source_null_province=None, source_null_district=None):
-    if nepalpay_accs is None: nepalpay_accs = set()
-    if source_null_province is None: source_null_province = set()
-    if source_null_district is None: source_null_district = set()
-
-    CBSMerchant.objects.filter(account_number__in=all_accounts).delete()
-
-    mock_municipality_options = ["Kathmandu MP", "Lalitpur Sub MP", "Byans RM", "Bharatpur MP", "Hetauda Sub MP", "Birendranagar MC", "Pokhara MP"]
-
-    mock_merchants = []
-    for acc in all_accounts:
-        muni = "" if acc in nepalpay_accs else random.choice(mock_municipality_options)
-        prov = "" if acc in source_null_province else random.choice(provinces_list)
-        dist = "" if acc in source_null_district else random.choice(districts_list)
-
-        mock_merchants.append(CBSMerchant(
-            account_number=acc,
-            province=prov,
-            district=dist,
-            municipality=muni,
-            address_1=f"{random.randint(1, 100)} Random Marga",
-            address_2=random.choice([f"Ward {random.randint(1, 32)}", "Near Branch", ""]),
-            gender=random.choice(['M', 'F', 'O']),
-            dob=_random_dob(),
-            country_code=random.choices(['01', '11', '41'], weights=[85, 10, 5])[0],
-        ))
-    if mock_merchants:
-        CBSMerchant.objects.bulk_create(mock_merchants)
+    """
+    No-op. CBSMerchant is populated exclusively from the real CBS export
+    (load_cbs_excel command). We never inject placeholder rows — accounts
+    absent from CBS will be flagged for manual input at review time.
+    """
+    pass
 
 def _ensure_clean_cbs(account_numbers):
     """
-    Ensure every account in account_numbers has a CleanCBS record.
-    For accounts not yet in CleanCBS, copy data from CBSMerchant.
-    Accounts absent from both get an empty CleanCBS shell.
-    CBSMerchant is never modified — it is the read-only bank source.
+    Sync CleanCBS from the CBS data source for the given accounts.
+    • Only accounts known to CBS get a CleanCBS record.
+    • Existing CleanCBS rows: any blank field is backfilled from CBS.
+    The CBS source is never written to.
     """
     accs = {str(a) for a in account_numbers if a and str(a).strip()}
     if not accs:
         return
-    # Chunk all DB queries — SQLite has a hard IN-clause limit (~999 variables)
-    existing = set()
-    for chunk in [list(accs)[i:i+900] for i in range(0, len(accs), 900)]:
-        existing.update(CleanCBS.objects.filter(account_number__in=chunk).values_list('account_number', flat=True))
-    new_accs = accs - existing
-    if not new_accs:
+
+    # Single call to the CBS abstraction — swap cbs_lookup() for API when ready
+    cbs_map = cbs_lookup(accs)
+    if not cbs_map:
         return
-    cbs_map = {}
-    new_accs_list = list(new_accs)
-    for chunk in [new_accs_list[i:i+900] for i in range(0, len(new_accs_list), 900)]:
-        for r in CBSMerchant.objects.filter(account_number__in=chunk).values(
-            'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender', 'dob', 'country_code'
-        ):
-            cbs_map[r['account_number']] = r
+
+    cbs_accs = list(cbs_map.keys())
+
+    # Split into new vs existing CleanCBS rows
+    existing_map = {}
+    for chunk in [cbs_accs[i:i+900] for i in range(0, len(cbs_accs), 900)]:
+        for obj in CleanCBS.objects.filter(account_number__in=chunk):
+            existing_map[obj.account_number] = obj
+
+    # --- Create new CleanCBS records ---
     to_create = []
-    for acc in new_accs:
-        r = cbs_map.get(acc, {})
+    for acc in cbs_accs:
+        if acc in existing_map:
+            continue
+        r = cbs_map[acc]
         to_create.append(CleanCBS(
             account_number=acc,
-            province=r.get('province') or '',
-            district=r.get('district') or '',
-            municipality=r.get('municipality') or '',
-            address_1=r.get('address_1') or '',
-            address_2=r.get('address_2') or '',
-            gender=r.get('gender') or '',
-            dob=r.get('dob'),
-            country_code=r.get('country_code') or '01',
+            province=r['province'],
+            district=r['district'],
+            municipality=r['municipality'],
+            address_1=r['address_1'],
+            address_3=r['address_3'],
+            gender=r['gender'] or '',
+            dob=r['dob'],
+            country_code=r['country_code'],
         ))
-    CleanCBS.objects.bulk_create(to_create, ignore_conflicts=True)
+    if to_create:
+        CleanCBS.objects.bulk_create(to_create, ignore_conflicts=True)
+
+    # --- Backfill blank fields in existing records ---
+    to_update = []
+    for acc, obj in existing_map.items():
+        r = cbs_map.get(acc)
+        if not r:
+            continue
+        changed = False
+        for field in ('province', 'district', 'address_1', 'address_3',
+                      'gender', 'dob', 'country_code'):
+            current = getattr(obj, field)
+            if not current or (isinstance(current, str) and current.strip() == ''):
+                new_val = r.get(field)
+                if new_val and str(new_val).strip():
+                    setattr(obj, field, new_val)
+                    changed = True
+        if changed:
+            to_update.append(obj)
+
+    if to_update:
+        CleanCBS.objects.bulk_update(
+            to_update,
+            ['province', 'district', 'address_1', 'address_3', 'gender', 'dob', 'country_code'],
+            batch_size=500,
+        )
 
 def perform_step1_and_2(file_or_path, unique_id, uid=None):
     """Core pipeline. Accepts file object or path. If uid is provided, tracks progress."""
@@ -276,7 +370,23 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         nepalpay_accs.update(nepalpay_df[nepalpay_acc_col].dropna().astype(str).tolist())
         
     all_accounts = fonepay_accs | nepalpay_accs
-    
+
+    # Drop rows with invalid account numbers (names, phone numbers, etc.)
+    # before any further processing. Invalid = not all-digit or < 15 chars.
+    if fonepay_acc_col and fonepay_acc_col in fonepay_df.columns:
+        fonepay_df = fonepay_df[fonepay_df[fonepay_acc_col].apply(
+            lambda x: is_valid_account_number(str(x).strip())
+        )].copy()
+    if nepalpay_acc_col and nepalpay_acc_col in nepalpay_df.columns:
+        nepalpay_df = nepalpay_df[nepalpay_df[nepalpay_acc_col].apply(
+            lambda x: is_valid_account_number(str(x).strip())
+        )].copy()
+
+    # Rebuild account sets after filtering
+    fonepay_accs = set(fonepay_df[fonepay_acc_col].dropna().astype(str).tolist()) if fonepay_acc_col else set()
+    nepalpay_accs = set(nepalpay_df[nepalpay_acc_col].dropna().astype(str).tolist()) if nepalpay_acc_col else set()
+    all_accounts = fonepay_accs | nepalpay_accs
+
     source_null_province = set()
     source_null_district = set()
     
@@ -309,7 +419,7 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
     _ensure_clean_cbs(all_accounts)
 
     all_cbs_data = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=all_accounts).values(
-        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender', 'dob'
+        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3', 'gender', 'dob'
     )))
     # Derive age dynamically from DOB so there's no stored-age staleness.
     if not all_cbs_data.empty:
@@ -339,7 +449,7 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         fonepay_step2_df['gender'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'gender'), axis=1)
         fonepay_step2_df['age'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'age'), axis=1)
         fonepay_step2_df['address_1'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address1', cbs_col='address_1'), axis=1)
-        fonepay_step2_df['address_2'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address2', cbs_col='address_2'), axis=1)
+        fonepay_step2_df['address_3'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address3', cbs_col='address_3'), axis=1)
 
     if nepalpay_acc_col:
         fill_np = get_fill_col(nepalpay_acc_col, cbs_lookup)
@@ -350,7 +460,7 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         nepalpay_step2_df['gender'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'gender'), axis=1)
         nepalpay_step2_df['age'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'age'), axis=1)
         nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address1', cbs_col='address_1'), axis=1)
-        nepalpay_step2_df['address_2'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address2', cbs_col='address_2'), axis=1)
+        nepalpay_step2_df['address_3'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address3', cbs_col='address_3'), axis=1)
 
     output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(output_dir, exist_ok=True)
@@ -442,22 +552,36 @@ def _generate_final_report(unique_id):
     pp_acc_col = find_account_col(phonepay_df)
     np2_acc_col = find_account_col(nepalpay_df)
 
+    # FonePay payment-detail files use a short MERCHANT_ID (6-7 digits) rather than
+    # the full CBS account number.  Build a MERCHANT_ID → Account Number bridge from
+    # the step-2 FonePay data so CBS gender/province lookups work for those rows.
+    if pp_acc_col is None and not phonepay_df.empty and not f_step2.empty:
+        fp_mid_s2 = find_col_by_norm(f_step2, 'merchantid')
+        fp_acc_s2 = find_account_col(f_step2)
+        if fp_mid_s2 and fp_acc_s2:
+            mid_to_acc = (
+                f_step2[[fp_mid_s2, fp_acc_s2]]
+                .dropna()
+                .set_index(f_step2[fp_mid_s2].astype(str))[fp_acc_s2]
+                .astype(str)
+                .to_dict()
+            )
+            # Try MERCHANT_ID then MERCHANT_IDENTIFIER column names
+            for _mid_col in ['MERCHANT_ID', 'MERCHANT_IDENTIFIER']:
+                if _mid_col in phonepay_df.columns:
+                    phonepay_df['_account_number'] = (
+                        phonepay_df[_mid_col].astype(str).map(mid_to_acc)
+                    )
+                    if phonepay_df['_account_number'].notna().any():
+                        pp_acc_col = '_account_number'
+                        break
+
     add_accs = set()
     if pp_acc_col: add_accs.update(phonepay_df[pp_acc_col].dropna().astype(str).tolist())
     if np2_acc_col: add_accs.update(nepalpay_df[np2_acc_col].dropna().astype(str).tolist())
 
     if add_accs:
-        # Seed mock CBS records for any payment-detail accounts not yet in CBSMerchant,
-        # then ensure CleanCBS has a record for each (copying from CBSMerchant if needed).
-        existing_cbs_accs = set(CBSMerchant.objects.filter(
-            account_number__in=add_accs
-        ).values_list('account_number', flat=True))
-        new_accs = add_accs - existing_cbs_accs
-        if new_accs:
-            np_payment_accs = set()
-            if np2_acc_col and not nepalpay_df.empty:
-                np_payment_accs = set(nepalpay_df[np2_acc_col].dropna().astype(str).tolist())
-            generate_mock_data(new_accs, nepalpay_accs=np_payment_accs)
+        # Sync CleanCBS from CBS source for all payment-detail accounts.
         _ensure_clean_cbs(add_accs)
 
         all_cbs_add = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=add_accs).values(
@@ -489,12 +613,13 @@ def _generate_final_report(unique_id):
         temp = pd.DataFrame()
         temp['account_number'] = df[acc_col]
         for p in ['province', 'district', 'municipality', 'gender']:
-            found = False
+            # Use LAST matching column so the enriched lowercase column (added at
+            # the end of step-2 enrichment) wins over the original capitalized one.
+            matched_col = None
             for c in df.columns:
                 if str(c).lower().replace(' ', '').replace('_', '') == p:
-                    temp[p] = df[c]
-                    found = True; break
-            if not found: temp[p] = None
+                    matched_col = c
+            temp[p] = df[matched_col] if matched_col is not None else None
         return temp
 
     p1 = get_norm_df(f_step2, f_acc_col)
@@ -567,13 +692,28 @@ def _generate_final_report(unique_id):
         temp = pd.DataFrame()
         temp['account_number'] = df[acc_col] if acc_col and acc_col in df.columns else None
         for p in ['province', 'district', 'municipality', 'gender']:
-            found = False
+            # Use the FIRST matching column for province/district/municipality so the
+            # original data from the payment file ('PROVINCE', 'DISTRICT', 'MUNICIPALITY')
+            # takes priority over the CBS-patched lowercase column added later.
+            # The CBS-patched column still covers NepalPay (which has no original cols)
+            # and any rows where the original column is null.
+            first_col = last_col = None
             for c in df.columns:
                 if str(c).lower().replace(' ', '').replace('_', '') == p:
-                    temp[p] = df[c]
-                    found = True; break
-            if not found: temp[p] = None
-        
+                    if first_col is None:
+                        first_col = c
+                    last_col = c
+            if first_col is None:
+                temp[p] = None
+            elif first_col == last_col:
+                temp[p] = df[first_col]
+            else:
+                # Coalesce: original (first) value when non-empty; fall back to CBS (last)
+                orig = df[first_col]
+                cbs  = df[last_col]
+                empty_mask = orig.isna() | (orig.astype(str).str.strip() == '') | (orig.astype(str).str.lower() == 'null')
+                temp[p] = orig.where(~empty_mask, cbs)
+
         amt_col = get_col_txns(df, amt_cols)
         temp['amount'] = pd.to_numeric(df[amt_col], errors='coerce').fillna(0) if amt_col else 0.0
         return temp
@@ -978,18 +1118,11 @@ def _check_payment_detail_missing(uid):
     if not add_accs:
         return {}
 
-    # Seed mock CBS for any payment-detail accounts not yet in CBSMerchant,
-    # then sync to CleanCBS (our writable copy).
-    existing_accs = set(CBSMerchant.objects.filter(
-        account_number__in=add_accs
-    ).values_list('account_number', flat=True))
-    new_accs = add_accs - existing_accs
-    if new_accs:
-        generate_mock_data(new_accs, nepalpay_accs=np_payment_accs)
+    # Sync CleanCBS from CBS source for all payment-detail accounts.
     _ensure_clean_cbs(add_accs)
 
     cbs_rows = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=add_accs).values(
-        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_2', 'gender'
+        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3', 'gender'
     )))
     if cbs_rows.empty:
         return {}
@@ -1013,7 +1146,7 @@ def _check_payment_detail_missing(uid):
                 'account_number': acc,
                 'is_nepalpay': acc in np_payment_accs,
                 'address_1': str(row.get('address_1') or ''),
-                'address_2': str(row.get('address_2') or ''),
+                'address_3': str(row.get('address_3') or ''),
                 'needs_province': needs_province,
                 'needs_district': needs_district,
                 'needs_municipality': needs_municipality,
@@ -1168,16 +1301,16 @@ def api_finalize(request, unique_id):
 def review_missing_data(request, unique_id):
     f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
     n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
-    
+
     if not os.path.exists(f_path2) or not os.path.exists(n_path2):
         raise Http404("Processed Data Files not found. They might have been deleted.")
-        
+
     f_step2 = pd.read_excel(f_path2, dtype=str)
     n_step2 = pd.read_excel(n_path2, dtype=str)
-    
+
     fp_missing = check_missing_records(f_step2, ['province', 'district', 'municipality'], find_account_col(f_step2))
     np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality'], find_account_col(n_step2))
-    
+
     all_missing = []
     for acc, data in fp_missing.items():
         data['platform'] = 'FonePay'
@@ -1186,7 +1319,30 @@ def review_missing_data(request, unique_id):
         if acc not in fp_missing:
             data['platform'] = 'Nepal Pay'
             all_missing.append(data)
-            
+
+    # Fetch address + presence from the CBS abstraction layer.
+    # cbs_lookup() is authoritative; CleanCBS is fallback for manually-added accounts.
+    all_accs = [d['account_number'] for d in all_missing]
+
+    cbs_data = cbs_lookup(all_accs)          # single call — swap for API later
+    in_cbs   = set(cbs_data.keys())
+
+    # Fallback addresses from CleanCBS for accounts not in CBS
+    clean_addr = {}
+    missing_from_cbs = [a for a in all_accs if a not in in_cbs]
+    for chunk in [missing_from_cbs[i:i+900] for i in range(0, len(missing_from_cbs), 900)]:
+        for r in CleanCBS.objects.filter(account_number__in=chunk).values(
+            'account_number', 'address_1', 'address_3'
+        ):
+            clean_addr[r['account_number']] = r
+
+    for d in all_missing:
+        acc = d['account_number']
+        r = cbs_data.get(acc) or clean_addr.get(acc, {})
+        d['address_1']  = r.get('address_1') or ''
+        d['address_3']  = r.get('address_3') or ''
+        d['not_in_cbs'] = acc not in in_cbs
+
     return render(request, 'merchant/review_missing_data.html', {
         'unique_id': unique_id,
         'missing_records': all_missing,

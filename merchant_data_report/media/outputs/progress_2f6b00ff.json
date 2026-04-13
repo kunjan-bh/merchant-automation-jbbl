@@ -1,1 +1,0 @@
-{"step": 5, "status": "action_required", "detail": "Found 10722 records still missing geographical data", "unique_id": "2f6b00ff", "fonepay_count": 20786, "nepalpay_count": 9331, "log": "Unable to resolve Province/District/Municipality for 10722 accounts via CBS."}

@@ -159,7 +159,7 @@
                         <tr>
                             <th style="width: 140px;">Account / Platform</th>
                             <th>Address 1</th>
-                            <th>Address 2</th>
+                            <th>Address 3</th>
                             <th style="width: 150px;">Province</th>
                             <th style="width: 150px;">District</th>
                             <th style="width: 180px;">Municipality Type</th>
@@ -172,9 +172,12 @@
                             <td>
                                 <strong>{{ row.account_number }}</strong><br>
                                 <span style="font-size: 0.75rem; color: #0284c7; font-weight: 500;">{{ row.platform }}</span>
+                                {% if row.not_in_cbs %}
+                                <br><span style="font-size: 0.7rem; color: #f97316; font-weight: 600;">⚠ Not in CBS</span>
+                                {% endif %}
                             </td>
                             <td>{{ row.address_1 }}</td>
-                            <td>{{ row.address_2 }}</td>
+                            <td>{{ row.address_3 }}</td>
                             
                             <!-- Province Column -->
                             <td>

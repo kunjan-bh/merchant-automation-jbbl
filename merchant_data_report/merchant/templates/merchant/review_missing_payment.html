@@ -174,9 +174,9 @@
                         </td>
                         <td class="account">{{ row.account_number }}</td>
                         <td>
-                            {% if row.address_1 or row.address_2 %}
+                            {% if row.address_1 or row.address_3 %}
                                 <div>{{ row.address_1 }}</div>
-                                {% if row.address_2 %}<div class="addr">{{ row.address_2 }}</div>{% endif %}
+                                {% if row.address_3 %}<div class="addr">{{ row.address_3 }}</div>{% endif %}
                             {% else %}
                                 <span class="filled">—</span>
                             {% endif %}
