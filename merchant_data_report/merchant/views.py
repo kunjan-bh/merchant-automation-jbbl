@@ -1129,6 +1129,34 @@ def _check_payment_detail_missing(uid):
     pp_acc_col = find_account_col(phonepay_df_pay)
     np_acc_col = find_account_col(nepalpay_df_pay)
 
+    # FonePay payment-detail files carry a short MERCHANT_ID, not a full account
+    # number.  Build the same MERCHANT_ID → Account bridge used in report generation
+    # so that FonePay accounts are included in the CBS pre-check and manual review.
+    if pp_acc_col is None and not phonepay_df_pay.empty:
+        f_path2 = os.path.join(output_dir, f'step2_fonepay_{uid}.xlsx')
+        try:
+            f_step2_pre = pd.read_excel(f_path2)
+            fp_mid_s2 = find_col_by_norm(f_step2_pre, 'merchantid')
+            fp_acc_s2 = find_account_col(f_step2_pre)
+            if fp_mid_s2 and fp_acc_s2:
+                mid_to_acc_pre = (
+                    f_step2_pre[[fp_mid_s2, fp_acc_s2]]
+                    .dropna()
+                    .set_index(f_step2_pre[fp_mid_s2].astype(str))[fp_acc_s2]
+                    .astype(str)
+                    .to_dict()
+                )
+                for _mid_col in ['MERCHANT_ID', 'MERCHANT_IDENTIFIER']:
+                    if _mid_col in phonepay_df_pay.columns:
+                        phonepay_df_pay['_account_number'] = (
+                            phonepay_df_pay[_mid_col].astype(str).map(mid_to_acc_pre)
+                        )
+                        if phonepay_df_pay['_account_number'].notna().any():
+                            pp_acc_col = '_account_number'
+                            break
+        except Exception:
+            pass
+
     add_accs = set()
     np_payment_accs = set()
     if pp_acc_col and not phonepay_df_pay.empty:
