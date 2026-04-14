@@ -72,7 +72,21 @@ def check_missing_records(df, required_cols, index_col):
     for _, row in df.iterrows():
         acc = str(row.get(index_col)).strip()
         if not acc or is_empty(acc): continue
-        missing = [c for c in required_cols if is_empty(row.get(c))]
+        
+        missing = []
+        for c in required_cols:
+            val = row.get(c)
+            # Re-use mappers below to ensure non-empty strings are actually valid.
+            if is_empty(val):
+                missing.append(c)
+            elif c == 'province' and map_province(val) == 'Unmatched':
+                missing.append(c)
+            elif c == 'district' and map_district(val) == 'Unmatched':
+                missing.append(c)
+            elif c == 'municipality' and map_local(val) == 'Unmatched':
+                missing.append(c)
+            # Gender drops to Company automatically if unknown per logic, so we only flag if strictly IS_EMPTY
+            
         if missing:
             if acc not in missing_dict:
                 missing_dict[acc] = {
@@ -373,14 +387,23 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
 
     # Drop rows with invalid account numbers (names, phone numbers, etc.)
     # before any further processing. Invalid = not all-digit or < 15 chars.
+    invalid_dropped_count = 0
     if fonepay_acc_col and fonepay_acc_col in fonepay_df.columns:
+        initial_f_len = len(fonepay_df)
         fonepay_df = fonepay_df[fonepay_df[fonepay_acc_col].apply(
             lambda x: is_valid_account_number(str(x).strip())
         )].copy()
+        invalid_dropped_count += initial_f_len - len(fonepay_df)
+        
     if nepalpay_acc_col and nepalpay_acc_col in nepalpay_df.columns:
+        initial_n_len = len(nepalpay_df)
         nepalpay_df = nepalpay_df[nepalpay_df[nepalpay_acc_col].apply(
             lambda x: is_valid_account_number(str(x).strip())
         )].copy()
+        invalid_dropped_count += initial_n_len - len(nepalpay_df)
+        
+    if uid and invalid_dropped_count > 0:
+        _set_progress(uid, 2, 'active', f'Filtering columns — {len(fonepay_df):,} FonePay + {len(nepalpay_df):,} NepalPay records', extra={'log': f'Dropped {invalid_dropped_count} rows with invalid accounts (not numeric or < 15 chars).'})
 
     # Rebuild account sets after filtering
     fonepay_accs = set(fonepay_df[fonepay_acc_col].dropna().astype(str).tolist()) if fonepay_acc_col else set()
@@ -1136,10 +1159,10 @@ def _check_payment_detail_missing(uid):
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
 
-        needs_province     = is_empty(row.get('province'))
-        needs_district     = is_empty(row.get('district'))
+        needs_province     = is_empty(row.get('province')) or map_province(row.get('province')) == 'Unmatched'
+        needs_district     = is_empty(row.get('district')) or map_district(row.get('district')) == 'Unmatched'
+        needs_municipality = is_empty(row.get('municipality')) or map_local(row.get('municipality')) == 'Unmatched'
         needs_gender       = is_empty(row.get('gender'))
-        needs_municipality = is_empty(row.get('municipality'))
 
         if any([needs_province, needs_district, needs_municipality, needs_gender]):
             missing_dict[acc] = {
