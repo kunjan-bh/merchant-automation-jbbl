@@ -193,6 +193,36 @@ _DISTRICT_ALIAS = {
     'western rukum':  'Rukum West',
 }
 
+# District → Province lookup: derive province from district without AI
+_DISTRICT_TO_PROVINCE = {}
+_koshi_districts = ['Bhojpur', 'Dhankuta', 'Ilam', 'Jhapa', 'Khotang', 'Morang', 'Okhaldhunga', 'Panchthar', 'Sankhuwasabha', 'Solukhumbu', 'Sunsari', 'Taplejung', 'Tehrathum', 'Udayapur']
+_madhesh_districts = ['Bara', 'Parsa', 'Rautahat', 'Sarlahi', 'Dhanusha', 'Siraha', 'Mahottari', 'Saptari']
+_bagmati_districts = ['Sindhuli', 'Ramechhap', 'Dolakha', 'Bhaktapur', 'Dhading', 'Kathmandu', 'Kavrepalanchok', 'Lalitpur', 'Nuwakot', 'Rasuwa', 'Sindhupalchok', 'Chitwan', 'Makwanpur']
+_gandaki_districts = ['Baglung', 'Gorkha', 'Kaski', 'Lamjung', 'Manang', 'Mustang', 'Myagdi', 'Nawalpur', 'Parbat', 'Syangja', 'Tanahun']
+_lumbini_districts = ['Arghakhanchi', 'Gulmi', 'Kapilvastu', 'Parasi', 'Palpa', 'Rupandehi', 'Banke', 'Bardiya', 'Dang', 'Pyuthan', 'Rolpa', 'Rukum East']
+_karnali_districts = ['Dailekh', 'Dolpa', 'Humla', 'Jajarkot', 'Jumla', 'Kalikot', 'Mugu', 'Rukum West', 'Salyan', 'Surkhet']
+_sudurpaschim_districts = ['Achham', 'Baitadi', 'Bajhang', 'Bajura', 'Dadeldhura', 'Darchula', 'Doti', 'Kailali', 'Kanchanpur']
+for _d in _koshi_districts:       _DISTRICT_TO_PROVINCE[_d.lower()] = 'Koshi'
+for _d in _madhesh_districts:     _DISTRICT_TO_PROVINCE[_d.lower()] = 'Madhesh'
+for _d in _bagmati_districts:     _DISTRICT_TO_PROVINCE[_d.lower()] = 'Bagmati'
+for _d in _gandaki_districts:     _DISTRICT_TO_PROVINCE[_d.lower()] = 'Gandaki'
+for _d in _lumbini_districts:     _DISTRICT_TO_PROVINCE[_d.lower()] = 'Lumbini'
+for _d in _karnali_districts:     _DISTRICT_TO_PROVINCE[_d.lower()] = 'Karnali'
+for _d in _sudurpaschim_districts: _DISTRICT_TO_PROVINCE[_d.lower()] = 'Sudurpaschim'
+# Also add alias spellings
+for _alias, _canonical in _DISTRICT_ALIAS.items():
+    _canon_lower = _canonical.lower()
+    if _canon_lower in _DISTRICT_TO_PROVINCE:
+        _DISTRICT_TO_PROVINCE[_alias] = _DISTRICT_TO_PROVINCE[_canon_lower]
+
+
+def province_from_district(district_str):
+    """Derive province from a known district name. Returns province or None."""
+    if not district_str or pd.isna(district_str):
+        return None
+    d = str(district_str).strip().replace(' District', '').lower()
+    return _DISTRICT_TO_PROVINCE.get(d)
+
 def map_district(d):
     if pd.isna(d) or str(d).strip() == '': return 'Unmatched'
     d_str = str(d).strip().title()
@@ -305,75 +335,6 @@ def generate_mock_data(all_accounts, nepalpay_accs=None, source_null_province=No
     """
     pass
 
-def _ensure_clean_cbs(account_numbers):
-    """
-    Sync CleanCBS from the CBS data source for the given accounts.
-    • Only accounts known to CBS get a CleanCBS record.
-    • Existing CleanCBS rows: any blank field is backfilled from CBS.
-    The CBS source is never written to.
-    """
-    accs = {str(a) for a in account_numbers if a and str(a).strip()}
-    if not accs:
-        return
-
-    # Single call to the CBS abstraction — swap cbs_lookup() for API when ready
-    cbs_map = _cbs_source_lookup(accs)
-    if not cbs_map:
-        return
-
-    cbs_accs = list(cbs_map.keys())
-
-    # Split into new vs existing CleanCBS rows
-    existing_map = {}
-    for chunk in [cbs_accs[i:i+900] for i in range(0, len(cbs_accs), 900)]:
-        for obj in CleanCBS.objects.filter(account_number__in=chunk):
-            existing_map[obj.account_number] = obj
-
-    # --- Create new CleanCBS records ---
-    to_create = []
-    for acc in cbs_accs:
-        if acc in existing_map:
-            continue
-        r = cbs_map[acc]
-        to_create.append(CleanCBS(
-            account_number=acc,
-            province=r['province'],
-            district=r['district'],
-            municipality=r['municipality'],
-            address_1=r['address_1'],
-            address_3=r['address_3'],
-            gender=r['gender'] or '',
-            dob=r['dob'],
-            country_code=r['country_code'],
-        ))
-    if to_create:
-        CleanCBS.objects.bulk_create(to_create, ignore_conflicts=True)
-
-    # --- Backfill blank fields in existing records ---
-    to_update = []
-    for acc, obj in existing_map.items():
-        r = cbs_map.get(acc)
-        if not r:
-            continue
-        changed = False
-        for field in ('province', 'district', 'address_1', 'address_3',
-                      'gender', 'dob', 'country_code'):
-            current = getattr(obj, field)
-            if not current or (isinstance(current, str) and current.strip() == ''):
-                new_val = r.get(field)
-                if new_val and str(new_val).strip():
-                    setattr(obj, field, new_val)
-                    changed = True
-        if changed:
-            to_update.append(obj)
-
-    if to_update:
-        CleanCBS.objects.bulk_update(
-            to_update,
-            ['province', 'district', 'address_1', 'address_3', 'gender', 'dob', 'country_code'],
-            batch_size=500,
-        )
-
 def perform_step1_and_2(file_or_path, unique_id, uid=None):
     """Core pipeline. Accepts file object or path. If uid is provided, tracks progress."""
     if uid: _set_progress(uid, 1, 'active', 'Reading Excel workbook...')
@@ -482,19 +443,36 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
             corrections_map[r['account_number']] = r
 
     # 3. Merge: CBS base + CleanCBS overrides (CleanCBS wins for any non-empty field)
+    def _pick_val(cbs_dict, corr_dict, field):
+        """CBS is source of truth. CleanCBS only fills gaps CBS doesn't have."""
+        v = cbs_dict.get(field)
+        if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan', ''):
+            return str(v).strip() if isinstance(v, str) else v
+        v = corr_dict.get(field)
+        if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan', ''):
+            return str(v).strip() if isinstance(v, str) else v
+        return '' if field not in ('gender', 'dob') else None
+
     merged_rows = []
     for acc in all_accounts:
         cbs = raw_cbs_map.get(str(acc), {})
         corr = corrections_map.get(str(acc), {})
+        prov = _pick_val(cbs, corr, 'province') or ''
+        dist = _pick_val(cbs, corr, 'district') or ''
+        # Derive province from district when province is empty or unmappable
+        if dist and (not prov or map_province(prov) == 'Unmatched'):
+            derived = province_from_district(dist)
+            if derived:
+                prov = derived
         merged_rows.append({
             'account_number': str(acc),
-            'province':       corr.get('province')     or cbs.get('province')     or '',
-            'district':       corr.get('district')     or cbs.get('district')     or '',
-            'municipality':   corr.get('municipality') or cbs.get('municipality') or '',
-            'address_1':      corr.get('address_1')    or cbs.get('address_1')    or '',
-            'address_3':      corr.get('address_3')    or cbs.get('address_3')    or '',
-            'gender':         corr.get('gender')       or cbs.get('gender'),
-            'dob':            corr.get('dob')          or cbs.get('dob'),
+            'province':       prov,
+            'district':       dist,
+            'municipality':   _pick_val(cbs, corr, 'municipality') or '',
+            'address_1':      _pick_val(cbs, corr, 'address_1') or '',
+            'address_3':      _pick_val(cbs, corr, 'address_3') or '',
+            'gender':         _pick_val(cbs, corr, 'gender'),
+            'dob':            _pick_val(cbs, corr, 'dob'),
         })
 
     all_cbs_data = pd.DataFrame(merged_rows)
@@ -540,9 +518,67 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address1', cbs_col='address_1'), axis=1)
         nepalpay_step2_df['address_3'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address3', cbs_col='address_3'), axis=1)
 
+    # --- Populate CleanCBS from step2 enriched data ---
+    # For accounts NOT yet in CleanCBS, if step2 has valid district + municipality,
+    # derive province from district and save a complete record.
+    _existing_clean = set(
+        CleanCBS.objects.filter(account_number__in=[str(a) for a in all_accounts])
+        .values_list('account_number', flat=True)
+    )
+
+    _to_create = {}  # acc → {province, district, municipality, ...}
+    for _df, _acc_col in [(fonepay_step2_df, fonepay_acc_col), (nepalpay_step2_df, nepalpay_acc_col)]:
+        if _df is None or _df.empty or not _acc_col:
+            continue
+        for _, _row in _df.iterrows():
+            _acc = str(_row.get(_acc_col, '')).strip()
+            if not _acc or _acc in _existing_clean or _acc in _to_create:
+                continue
+
+            # Get district and municipality from step2 row
+            _dist_raw = None
+            _muni_raw = None
+            for _c in _df.columns:
+                _cn = str(_c).lower().replace(' ', '').replace('_', '')
+                if _cn == 'district' and _dist_raw is None:
+                    _dist_raw = _row.get(_c)
+                elif _cn == 'municipality' and _muni_raw is None:
+                    _muni_raw = _row.get(_c)
+
+            if is_empty(_dist_raw) or is_empty(_muni_raw):
+                continue
+
+            # Validate through mappers
+            _dist_mapped = map_district(str(_dist_raw))
+            _muni_mapped = map_local(str(_muni_raw))
+            if _dist_mapped == 'Unmatched' or _muni_mapped == 'Unmatched':
+                continue
+
+            # Derive province from district — never trust input file province
+            _prov = province_from_district(_dist_mapped)
+            if not _prov:
+                continue
+
+            # All three valid — prepare for CleanCBS
+            _cbs = raw_cbs_map.get(_acc, {})
+            _to_create[_acc] = CleanCBS(
+                account_number=_acc,
+                province=_prov,
+                district=_dist_mapped,
+                municipality=_muni_mapped,
+                address_1=_cbs.get('address_1') or '',
+                address_3=_cbs.get('address_3') or '',
+                gender=_cbs.get('gender'),
+                dob=_cbs.get('dob'),
+                country_code=_cbs.get('country_code') or '01',
+            )
+
+    if _to_create:
+        CleanCBS.objects.bulk_create(_to_create.values(), ignore_conflicts=True)
+
     output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(output_dir, exist_ok=True)
-    
+
     f_path1 = os.path.join(output_dir, f'step1_fonepay_{unique_id}.xlsx')
     n_path1 = os.path.join(output_dir, f'step1_nepalpay_{unique_id}.xlsx')
     f_path2 = os.path.join(output_dir, f'step2_fonepay_{unique_id}.xlsx')
@@ -706,16 +742,61 @@ def _generate_final_report(unique_id):
             ):
                 corr_pay[r['account_number']] = r
 
+        # Also build a step2 lookup — step2 files have enriched geo data for the
+        # same merchant accounts that appear in the payment transaction files.
+        step2_lookup = {}
+        for _s2 in [f_step2, n_step2]:
+            _s2_acc = find_account_col(_s2)
+            if _s2_acc and not _s2.empty:
+                for _, _row in _s2.iterrows():
+                    _a = str(_row.get(_s2_acc, '')).strip()
+                    if _a and _a not in step2_lookup:
+                        _prov = _row.get('province') or _row.get('Province') or ''
+                        _dist = _row.get('district') or _row.get('District') or ''
+                        _muni = _row.get('municipality') or _row.get('Municipality') or ''
+                        _gend = _row.get('gender') or _row.get('Gender') or ''
+                        if str(_prov).strip() and str(_prov).strip().lower() not in ('nan', 'null', ''):
+                            step2_lookup[_a] = {
+                                'province': str(_prov).strip(), 'district': str(_dist).strip(),
+                                'municipality': str(_muni).strip(), 'gender': str(_gend).strip(),
+                            }
+
         merged_pay = []
         for acc in add_accs:
             cbs  = raw_cbs_pay.get(str(acc), {})
             corr = corr_pay.get(str(acc), {})
+            s2   = step2_lookup.get(str(acc), {})
+
+            # Priority: CBS (source of truth) → step2 (enriched) → CleanCBS (corrections for empty fields only)
+            def _pick(field):
+                # CBS first — it's the source of truth
+                v = cbs.get(field)
+                if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan'):
+                    return str(v).strip()
+                # Step2 enriched data
+                v = s2.get(field)
+                if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan'):
+                    return str(v).strip()
+                # CleanCBS corrections — only for fields CBS/step2 don't have
+                v = corr.get(field)
+                if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan'):
+                    return str(v).strip()
+                return ''
+
+            prov = _pick('province')
+            dist = _pick('district')
+            # Derive province from district when empty or unmappable
+            if dist and (not prov or map_province(prov) == 'Unmatched'):
+                derived = province_from_district(dist)
+                if derived:
+                    prov = derived
+
             merged_pay.append({
                 'account_number': str(acc),
-                'province':     corr.get('province')     or cbs.get('province')     or '',
-                'district':     corr.get('district')     or cbs.get('district')     or '',
-                'municipality': corr.get('municipality') or cbs.get('municipality') or '',
-                'gender':       corr.get('gender')       or cbs.get('gender'),
+                'province':     prov,
+                'district':     dist,
+                'municipality': _pick('municipality'),
+                'gender':       _pick('gender') or None,
             })
         all_cbs_add = pd.DataFrame(merged_pay)
         add_lookup = all_cbs_add.set_index('account_number') if not all_cbs_add.empty else pd.DataFrame()
@@ -894,54 +975,6 @@ def _generate_final_report(unique_id):
     pp_norm = get_norm_df_with_amount(phonepay_df, pp_acc_col, ['originalamount', 'amount'])
     np_norm = get_norm_df_with_amount(nepalpay_df, np2_acc_col, ['amount'])
     all_payment_df = pd.concat([pp_norm, np_norm], ignore_index=True)
-
-    # ---- DEBUG: trace where transactions are lost ----
-    import logging
-    _dbg = logging.getLogger('payment_debug')
-    _dbg.setLevel(logging.DEBUG)
-    if not _dbg.handlers:
-        _dbg.addHandler(logging.StreamHandler())
-    _dbg.debug(f"=== PAYMENT DEBUG ===")
-    _dbg.debug(f"phonepay rows: {len(phonepay_df)}, nepalpay rows: {len(nepalpay_df)}, total: {len(all_payment_df)}")
-    # --- NepalPay deep check ---
-    if np2_acc_col and np2_acc_col in nepalpay_df.columns:
-        _np_accs = nepalpay_df[np2_acc_col].dropna().astype(str).unique()
-        _dbg.debug(f"  NEPALPAY unique accounts: {len(_np_accs)}")
-        _dbg.debug(f"  NEPALPAY sample account numbers: {list(_np_accs[:5])}")
-        _dbg.debug(f"  NEPALPAY account dtype: {nepalpay_df[np2_acc_col].dtype}")
-        # How many are in add_lookup?
-        _in_lookup = sum(1 for a in _np_accs if a in add_lookup.index)
-        _dbg.debug(f"  NEPALPAY accounts in add_lookup: {_in_lookup}/{len(_np_accs)}")
-        # How many are in raw CBS?
-        _in_cbs = sum(1 for a in _np_accs if str(a) in raw_cbs_pay)
-        _dbg.debug(f"  NEPALPAY accounts in raw_cbs_pay: {_in_cbs}/{len(_np_accs)}")
-        # Sample add_lookup index
-        _dbg.debug(f"  add_lookup index sample: {list(add_lookup.index[:5])}")
-        _dbg.debug(f"  add_lookup index dtype: {add_lookup.index.dtype}")
-        # Check if province got patched for NepalPay
-        if 'province' in nepalpay_df.columns:
-            _np_prov_nan = nepalpay_df['province'].isna().sum()
-            _dbg.debug(f"  NEPALPAY province NaN AFTER patch: {_np_prov_nan}/{len(nepalpay_df)}")
-        else:
-            _dbg.debug(f"  NEPALPAY province column NOT FOUND after patch!")
-        # For accounts NOT in add_lookup, show them
-        _missing_from_lookup = [a for a in _np_accs if a not in add_lookup.index]
-        if _missing_from_lookup:
-            _dbg.debug(f"  NEPALPAY accounts NOT in add_lookup ({len(_missing_from_lookup)}): {_missing_from_lookup[:5]}")
-        # For accounts IN add_lookup but with empty province
-        _in_but_empty = [a for a in _np_accs if a in add_lookup.index and (pd.isna(add_lookup.loc[a, 'province']) or str(add_lookup.loc[a, 'province']).strip() in ('', 'None', 'nan', 'null'))]
-        _dbg.debug(f"  NEPALPAY accounts in add_lookup but empty province: {len(_in_but_empty)}")
-        if _in_but_empty:
-            _dbg.debug(f"    sample: {_in_but_empty[:3]}")
-    # Final result check
-    for _geo in ['province', 'district', 'municipality']:
-        if _geo in all_payment_df.columns:
-            _mf = {'province': map_province, 'district': map_district, 'municipality': map_local}[_geo]
-            _mapped = all_payment_df[_geo].apply(_mf)
-            _um = (_mapped == 'Unmatched').sum()
-            _dbg.debug(f"  FINAL {_geo}: unmatched={_um}/{len(all_payment_df)}")
-    _dbg.debug(f"=== END PAYMENT DEBUG ===")
-    # ---- END DEBUG ----
 
     def create_txns_report_format(all_data, target_col, cats, index_col_name, map_func=None):
         final_df = pd.DataFrame()
@@ -1578,13 +1611,23 @@ def _check_payment_detail_missing(uid):
         corr = corr_pay2.get(acc, {})
         if not cbs and not corr:
             continue  # not in CBS at all — skip
+
+        def _pick2(field):
+            v = cbs.get(field)
+            if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan', ''):
+                return str(v).strip()
+            v = corr.get(field)
+            if v and str(v).strip() and str(v).strip().lower() not in ('null', 'nan', ''):
+                return str(v).strip()
+            return ''
+
         merged_pay2.append({
             'account_number': acc,
-            'province':     corr.get('province')     or cbs.get('province')     or '',
-            'district':     corr.get('district')     or cbs.get('district')     or '',
-            'municipality': corr.get('municipality') or cbs.get('municipality') or '',
-            'address_1':    corr.get('address_1')    or cbs.get('address_1')    or '',
-            'address_3':    corr.get('address_3')    or cbs.get('address_3')    or '',
+            'province':     _pick2('province'),
+            'district':     _pick2('district'),
+            'municipality': _pick2('municipality'),
+            'address_1':    _pick2('address_1'),
+            'address_3':    _pick2('address_3'),
             'gender':       corr.get('gender')       or cbs.get('gender'),
         })
 
@@ -1770,9 +1813,15 @@ def api_finalize(request, unique_id):
 def api_classify_municipality(request):
     """
     POST { "accounts": [ {"account": "...", "address_1": "...", "address_3": "...",
-                          "needs_province": true, "needs_district": true, "needs_municipality": true}, ... ] }
-    Returns { "results": { "<account>": {"province": "Bagmati", "district": "Kathmandu District", "municipality": "MC"}, ... } }
-    Classifies whichever fields are needed, saves results to CleanCBS for future runs.
+                          "needs_district": true, "needs_municipality": true}, ... ] }
+
+    AI only classifies district and municipality. Province is ALWAYS derived from district.
+    CBSMerchant values are never overridden.
+
+    Layer 1: CBS lookup — take existing district/municipality from CBS.
+    Layer 2: AI (Groq) — only for district/municipality still empty after layer 1.
+    Layer 3: Derive province from district (never AI).
+    Layer 4: Save to CleanCBS ONLY if all three (province + district + municipality) are present.
     """
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
@@ -1786,116 +1835,204 @@ def api_classify_municipality(request):
     if not accounts:
         return JsonResponse({'results': {}})
 
-    VALID_PROVINCES = set(provinces_list)
     VALID_DISTRICTS = set(districts_list)
     VALID_MUNI      = {'MP', 'MC', 'Sub MP', 'RM'}
 
-    SYSTEM_PROMPT = (
-        "You are a Nepal address classifier. For each account classify the requested fields using the place names in the address.\n\n"
-        "Valid provinces: Koshi, Madhesh, Bagmati, Gandaki, Lumbini, Karnali, Sudurpaschim\n\n"
-        "Valid districts — use exact spelling with ' District' suffix. All 77 Nepal districts are valid.\n\n"
-        "Valid municipality types:\n"
-        "  MP  = Metropolitan City (Kathmandu, Pokhara, Lalitpur, Bharatpur, Biratnagar, Birgunj, "
-        "Dharan, Hetauda, Butwal, Siddharthanagar, Madhyapur Thimi, Mechinagar)\n"
-        "  Sub MP = Sub-Metropolitan City (Dhankuta, Itahari, Damak, Birtamod, Urlabari, Bhadrapur, "
-        "Inaruwa, Rajbiraj, Lahan, Janakpur, Malangwa, Kalaiya, Simara, Bharatpur already MP, "
-        "Ratnanagar, Bhimdatt, Dhangadhi, Tulsipur, Ghorahi)\n"
-        "  MC  = Municipality (any named town/bazaar that is a municipality — e.g. Tansen, Khairahani, "
-        "Belkotgadhi, Bhimeshwor, Dhulikhel, Panauti, Banepa, Bidur, Trishuli, Damauli, Waling, "
-        "Putalibazar, Baglung, Musikot, Liwang, Salyan, Surkhet, Dipayal, Tikapur, Lamki)\n"
-        "  RM  = Rural Municipality (village, gaun, VDC-era names, rural areas)\n\n"
-        "Rules:\n"
-        "- Be aggressive — if you recognise the place name as a known Nepal settlement, classify it.\n"
-        "- Only return null if the address text gives truly no usable location information.\n"
-        "- Province mapping hints: Kathmandu/Lalitpur/Bhaktapur/Chitwan → Bagmati; "
-        "Kaski/Pokhara → Gandaki; Jhapa/Morang/Sunsari → Koshi; "
-        "Rupandehi/Kapilvastu/Palpa → Lumbini; Kailali/Kanchanpur → Sudurpaschim; "
-        "Dhanusha/Sarlahi/Mahottari → Madhesh; Surkhet/Dailekh/Jumla → Karnali.\n\n"
-        "Return ONLY a JSON object — no explanation, no markdown:\n"
-        '{"<account>": {"province": "Bagmati", "district": "Kathmandu District", "municipality": "MC"}, ...}\n'
-        "Include only the keys that were requested. Use null for genuinely unresolvable values."
-    )
+    # ---- Layer 1: CBS lookup — get existing correct values ----
+    acc_numbers = [item['account'] for item in accounts]
+    cbs_data = _cbs_source_lookup(acc_numbers)
 
-    def _classify_batch(batch, client):
-        lines = []
-        for item in batch:
-            addr1 = str(item.get('address_1') or '').strip()[:60]
-            addr3 = str(item.get('address_3') or '').strip()[:60]
-            needs = []
-            if item.get('needs_province'):     needs.append('province')
-            if item.get('needs_district'):     needs.append('district')
-            if item.get('needs_municipality'): needs.append('municipality')
-            lines.append(f"{item['account']} [{','.join(needs)}]: {addr1}|{addr3}")
-        user_msg = "Classify:\n" + '\n'.join(lines)
+    resolved = {}   # acc → {district, municipality}   (province derived later)
+    still_need_ai = []
 
-        def _call(max_tokens):
-            resp = client.chat.completions.create(
-                model='llama-3.1-8b-instant',
-                max_completion_tokens=max_tokens,
-                temperature=0,
-                messages=[
-                    {'role': 'system', 'content': SYSTEM_PROMPT},
-                    {'role': 'user', 'content': user_msg},
-                ]
-            )
-            raw = resp.choices[0].message.content.strip()
-            if raw.startswith('```'):
-                raw = re.sub(r'^```[a-z]*\n?', '', raw)
-                raw = re.sub(r'\n?```$', '', raw)
-            return json.loads(raw)
+    for item in accounts:
+        acc = item['account']
+        cbs = cbs_data.get(acc, {})
+
+        dist = cbs.get('district') or ''
+        muni = cbs.get('municipality') or ''
+
+        # Validate through mappers
+        dist_valid = dist and map_district(dist) != 'Unmatched'
+        muni_valid = muni and map_local(muni) != 'Unmatched'
+
+        entry = {}
+        if dist_valid: entry['district'] = map_district(dist)
+        if muni_valid: entry['municipality'] = map_local(muni)
+
+        resolved[acc] = entry
+
+        # Only district and municipality go to AI — never province
+        ai_needs = []
+        if not entry.get('district')     and item.get('needs_district'):     ai_needs.append('district')
+        if not entry.get('municipality') and item.get('needs_municipality'): ai_needs.append('municipality')
+
+        if ai_needs:
+            still_need_ai.append({
+                'account': acc,
+                'address_1': item.get('address_1', ''),
+                'address_3': item.get('address_3', ''),
+                'needs': ai_needs,
+            })
+
+    # ---- Layer 2: AI classification — district and municipality ONLY ----
+    if still_need_ai:
+        SYSTEM_PROMPT = (
+            "You are a Nepal address classifier. Given address fields (address_1 and address_3) "
+            "from Nepali bank records, determine the district and/or municipality type.\n\n"
+            "You will ONLY be asked to classify \"district\" and/or \"municipality\". Never return province.\n\n"
+            "DISTRICT — return the exact name from this list (must include ' District' suffix):\n"
+            "Bhojpur District, Dhankuta District, Ilam District, Jhapa District, Khotang District, "
+            "Morang District, Okhaldhunga District, Panchthar District, Sankhuwasabha District, "
+            "Solukhumbu District, Sunsari District, Taplejung District, Tehrathum District, "
+            "Udayapur District, Bara District, Parsa District, Rautahat District, Sarlahi District, "
+            "Dhanusha District, Siraha District, Mahottari District, Saptari District, "
+            "Sindhuli District, Ramechhap District, Dolakha District, Bhaktapur District, "
+            "Dhading District, Kathmandu District, Kavrepalanchok District, Lalitpur District, "
+            "Nuwakot District, Rasuwa District, Sindhupalchok District, Chitwan District, "
+            "Makwanpur District, Baglung District, Gorkha District, Kaski District, "
+            "Lamjung District, Manang District, Mustang District, Myagdi District, "
+            "Nawalpur District, Parbat District, Syangja District, Tanahun District, "
+            "Arghakhanchi District, Gulmi District, Kapilvastu District, Parasi District, "
+            "Palpa District, Rupandehi District, Banke District, Bardiya District, "
+            "Dang District, Pyuthan District, Rolpa District, Rukum East District, "
+            "Dailekh District, Dolpa District, Humla District, Jajarkot District, "
+            "Jumla District, Kalikot District, Mugu District, Rukum West District, "
+            "Salyan District, Surkhet District, Achham District, Baitadi District, "
+            "Bajhang District, Bajura District, Dadeldhura District, Darchula District, "
+            "Doti District, Kailali District, Kanchanpur District\n\n"
+            "MUNICIPALITY TYPE — classify based on the place name:\n"
+            "  MP = Metropolitan City (exactly 6 in Nepal): "
+            "Kathmandu MP, Pokhara MP, Lalitpur MP, Bharatpur MP, Biratnagar MP, Birgunj MP\n"
+            "  Sub MP = Sub-Metropolitan City (exactly 11): "
+            "Dharan, Hetauda, Butwal, Siddharthanagar, Itahari, Damak, "
+            "Janakpur, Dhangadhi, Tulsipur, Ghorahi, Mechinagar\n"
+            "  MC = Municipality: any named town, bazaar, or nagar that is an established municipality\n"
+            "  RM = Rural Municipality: village, gaun, rural VDC-era name, or any place not listed above\n\n"
+            "HINTS for classifying:\n"
+            "- address_3 often contains the town/village/VDC name — use it to identify the district\n"
+            "- address_1 may contain ward number, tole, or landmark — less useful for district\n"
+            "- If address says a well-known city (Kathmandu, Pokhara, Biratnagar etc.), it's MP\n"
+            "- If address mentions bazaar/chowk in a smaller town, likely MC\n"
+            "- If address mentions a VDC name or rural-sounding place, likely RM\n"
+            "- When uncertain between MC and RM, prefer RM (more common)\n\n"
+            "RULES:\n"
+            "1. Return ONLY the fields requested in brackets — nothing else\n"
+            "2. Use null if genuinely unresolvable from the address\n"
+            "3. Return ONLY a raw JSON object, no explanation, no markdown\n"
+            "4. Use the account number as-is for the JSON key (no brackets, no suffix)\n\n"
+            "Example output:\n"
+            '{"0600010012345000001": {"district": "Siraha District", "municipality": "MC"}, '
+            '"0600010067890000001": {"municipality": "RM"}}'
+        )
+
+        def _classify_batch(batch, client):
+            lines = []
+            for item in batch:
+                addr1 = str(item.get('address_1') or '').strip()[:80]
+                addr3 = str(item.get('address_3') or '').strip()[:80]
+                needs_str = ', '.join(item['needs'])
+                lines.append(f"{item['account']} [needs: {needs_str}] address_1={addr1} | address_3={addr3}")
+            user_msg = "Classify these accounts:\n" + '\n'.join(lines)
+
+            def _call(max_tokens):
+                resp = client.chat.completions.create(
+                    model='llama-3.1-8b-instant',
+                    max_completion_tokens=max_tokens,
+                    temperature=0,
+                    messages=[
+                        {'role': 'system', 'content': SYSTEM_PROMPT},
+                        {'role': 'user', 'content': user_msg},
+                    ]
+                )
+                raw = resp.choices[0].message.content.strip()
+                if raw.startswith('```'):
+                    raw = re.sub(r'^```[a-z]*\n?', '', raw)
+                    raw = re.sub(r'\n?```$', '', raw)
+                return json.loads(raw)
+
+            try:
+                return _call(1200)
+            except (json.JSONDecodeError, ValueError):
+                return _call(2000)
 
         try:
-            return _call(1200)
-        except (json.JSONDecodeError, ValueError):
-            # Retry with higher token budget in case response was cut off
-            return _call(2000)
+            from groq import Groq
+            api_key = os.getenv("GROQ_API_KEY")
+            if not api_key:
+                raise ValueError("GROQ_API_KEY is not set in .env")
+            client = Groq(api_key=api_key)
 
-    try:
-        from groq import Groq
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ValueError("GROQ_API_KEY is not set in .env")
+            batch_size = 10
+            for i in range(0, len(still_need_ai), batch_size):
+                batch = still_need_ai[i:i + batch_size]
+                try:
+                    batch_results = _classify_batch(batch, client)
+                except Exception:
+                    continue  # skip failed batch, don't crash entire request
 
-        client = Groq(api_key=api_key)
-        all_results = {}
+                for raw_acc, fields in batch_results.items():
+                    if not isinstance(fields, dict):
+                        continue
+                    # Strip any bracket/suffix the AI may echo back
+                    acc = re.sub(r'\s*\[.*\]\s*$', '', str(raw_acc)).strip()
+                    if acc not in resolved:
+                        continue
 
-        # One API call per batch of 10 (keeps output well under token limit)
-        batch_size = 10
-        for i in range(0, len(accounts), batch_size):
-            batch_results = _classify_batch(accounts[i:i + batch_size], client)
-            all_results.update(batch_results)
+                    # Only accept fields that were REQUESTED and are still missing
+                    requested = set()
+                    for item in batch:
+                        if item['account'] == acc:
+                            requested = set(item['needs'])
+                            break
 
-        # Validate each field against allowed values
-        clean = {}
-        for acc, fields in all_results.items():
-            if not isinstance(fields, dict):
-                continue
-            entry = {}
-            prov = fields.get('province')
-            dist = fields.get('district')
-            muni = fields.get('municipality')
-            if prov in VALID_PROVINCES:        entry['province']     = prov
-            if dist in VALID_DISTRICTS:        entry['district']     = dist
-            if muni in VALID_MUNI:             entry['municipality'] = muni
-            clean[acc] = entry
+                    dist = fields.get('district')
+                    muni = fields.get('municipality')
 
-        # Persist to CleanCBS — never overwrite an existing non-empty value
-        for acc, fields in clean.items():
-            if not fields:
-                continue
-            obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
-            changed = False
-            for field in ('province', 'district', 'municipality'):
-                val = fields.get(field)
-                if val and not getattr(obj, field, None):
-                    setattr(obj, field, val)
-                    changed = True
-            if changed:
-                obj.save()
+                    if 'district' in requested and dist in VALID_DISTRICTS and not resolved[acc].get('district'):
+                        resolved[acc]['district'] = dist
+                    if 'municipality' in requested and muni in VALID_MUNI and not resolved[acc].get('municipality'):
+                        resolved[acc]['municipality'] = muni
 
-        return JsonResponse({'results': clean})
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+    # ---- Layer 3: Derive province from district (never AI) ----
+    for acc, entry in resolved.items():
+        if entry.get('district'):
+            derived = province_from_district(entry['district'])
+            if derived:
+                entry['province'] = derived
+
+    # ---- Layer 4: Save to CleanCBS ONLY if all three are present ----
+    for acc, fields in resolved.items():
+        if not (fields.get('province') and fields.get('district') and fields.get('municipality')):
+            continue  # incomplete — don't save
+
+        obj, created = CleanCBS.objects.get_or_create(account_number=acc)
+
+        # Never overwrite a non-empty field
+        changed = False
+        for field in ('province', 'district', 'municipality'):
+            val = fields.get(field)
+            current = getattr(obj, field, None)
+            if val and (not current or str(current).strip() == ''):
+                setattr(obj, field, val)
+                changed = True
+
+        # Fill gender/dob/address from CBS (don't overwrite existing)
+        cbs = cbs_data.get(acc, {})
+        for field in ('gender', 'dob', 'country_code', 'address_1', 'address_3'):
+            cbs_val = cbs.get(field)
+            current = getattr(obj, field, None)
+            if cbs_val and (not current or str(current).strip() == ''):
+                setattr(obj, field, cbs_val)
+                changed = True
+
+        if changed:
+            obj.save()
+
+    return JsonResponse({'results': resolved})
 
 
 # --- LEGACY VIEWS (review, apply, finalize page, download) ---
@@ -2002,14 +2139,28 @@ def review_missing_data(request, unique_id):
                 all_patches[acc] = {}
             all_patches[acc].update(fields)
     for acc, fields in all_patches.items():
-        obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
-        changed = False
-        for field, val in fields.items():
-            if val and not getattr(obj, field, None):
-                setattr(obj, field, val)
-                changed = True
-        if changed:
-            obj.save()
+        obj = CleanCBS.objects.filter(account_number=acc).first()
+        if obj:
+            changed = False
+            for field, val in fields.items():
+                if val and not getattr(obj, field, None):
+                    setattr(obj, field, val)
+                    changed = True
+            if changed:
+                obj.save()
+        else:
+            # Only create if all three geo fields will be present
+            new_data = dict(fields)
+            # Derive province from district if not provided
+            if not new_data.get('province') and new_data.get('district'):
+                derived = province_from_district(new_data['district'])
+                if derived:
+                    new_data['province'] = derived
+            if new_data.get('province') and new_data.get('district') and new_data.get('municipality'):
+                CleanCBS.objects.create(account_number=acc, **{
+                    k: v for k, v in new_data.items()
+                    if k in ('province', 'district', 'municipality')
+                })
 
     # Populate address + CBS presence for display
     for d in truly_missing:
@@ -2067,11 +2218,33 @@ def apply_manual_mapping(request, unique_id):
         n_step2.to_excel(n_path2, index=False)
 
         # Persist user fills into CleanCBS — never into the bank's CBSMerchant
+        # Only save if record will be complete (province + district + municipality)
         for acc, fields in updates.items():
-            clean_obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
-            for col, val in fields.items():
-                setattr(clean_obj, col, val)
-            clean_obj.save()
+            clean_obj = CleanCBS.objects.filter(account_number=acc).first()
+            if clean_obj:
+                for col, val in fields.items():
+                    setattr(clean_obj, col, val)
+                # Derive province from district if missing
+                if not clean_obj.province and clean_obj.district:
+                    derived = province_from_district(clean_obj.district)
+                    if derived:
+                        clean_obj.province = derived
+                # Only keep if complete
+                if clean_obj.province and clean_obj.district and clean_obj.municipality:
+                    clean_obj.save()
+                else:
+                    clean_obj.delete()  # remove incomplete record
+            else:
+                # Derive province from district
+                if not fields.get('province') and fields.get('district'):
+                    derived = province_from_district(fields['district'])
+                    if derived:
+                        fields['province'] = derived
+                if fields.get('province') and fields.get('district') and fields.get('municipality'):
+                    CleanCBS.objects.create(account_number=acc, **{
+                        k: v for k, v in fields.items()
+                        if k in ('province', 'district', 'municipality')
+                    })
 
         # Kick off final report generation in background then return to main page
         _set_progress(unique_id, 8, 'active', 'Generating final report...')
@@ -2267,11 +2440,30 @@ def payment_detail_apply(request, unique_id):
                 updates.setdefault(acc, {})[col] = val
 
     # Write user fills to CleanCBS — never to the bank's CBSMerchant
+    # Only save if record will be complete (province + district + municipality)
     for acc, fields in updates.items():
-        clean_obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
-        for col, val in fields.items():
-            setattr(clean_obj, col, val)
-        clean_obj.save()
+        clean_obj = CleanCBS.objects.filter(account_number=acc).first()
+        if clean_obj:
+            for col, val in fields.items():
+                setattr(clean_obj, col, val)
+            if not clean_obj.province and clean_obj.district:
+                derived = province_from_district(clean_obj.district)
+                if derived:
+                    clean_obj.province = derived
+            if clean_obj.province and clean_obj.district and clean_obj.municipality:
+                clean_obj.save()
+            else:
+                clean_obj.delete()
+        else:
+            if not fields.get('province') and fields.get('district'):
+                derived = province_from_district(fields['district'])
+                if derived:
+                    fields['province'] = derived
+            if fields.get('province') and fields.get('district') and fields.get('municipality'):
+                CleanCBS.objects.create(account_number=acc, **{
+                    k: v for k, v in fields.items()
+                    if k in ('province', 'district', 'municipality')
+                })
 
     # Generate the final report now (skipped/empty gender → Company; skipped geo fields → excluded from geo totals)
     report = _generate_final_report(unique_id)
