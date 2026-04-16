@@ -518,64 +518,6 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address1', cbs_col='address_1'), axis=1)
         nepalpay_step2_df['address_3'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address3', cbs_col='address_3'), axis=1)
 
-    # --- Populate CleanCBS from step2 enriched data ---
-    # For accounts NOT yet in CleanCBS, if step2 has valid district + municipality,
-    # derive province from district and save a complete record.
-    _existing_clean = set(
-        CleanCBS.objects.filter(account_number__in=[str(a) for a in all_accounts])
-        .values_list('account_number', flat=True)
-    )
-
-    _to_create = {}  # acc → {province, district, municipality, ...}
-    for _df, _acc_col in [(fonepay_step2_df, fonepay_acc_col), (nepalpay_step2_df, nepalpay_acc_col)]:
-        if _df is None or _df.empty or not _acc_col:
-            continue
-        for _, _row in _df.iterrows():
-            _acc = str(_row.get(_acc_col, '')).strip()
-            if not _acc or _acc in _existing_clean or _acc in _to_create:
-                continue
-
-            # Get district and municipality from step2 row
-            _dist_raw = None
-            _muni_raw = None
-            for _c in _df.columns:
-                _cn = str(_c).lower().replace(' ', '').replace('_', '')
-                if _cn == 'district' and _dist_raw is None:
-                    _dist_raw = _row.get(_c)
-                elif _cn == 'municipality' and _muni_raw is None:
-                    _muni_raw = _row.get(_c)
-
-            if is_empty(_dist_raw) or is_empty(_muni_raw):
-                continue
-
-            # Validate through mappers
-            _dist_mapped = map_district(str(_dist_raw))
-            _muni_mapped = map_local(str(_muni_raw))
-            if _dist_mapped == 'Unmatched' or _muni_mapped == 'Unmatched':
-                continue
-
-            # Derive province from district — never trust input file province
-            _prov = province_from_district(_dist_mapped)
-            if not _prov:
-                continue
-
-            # All three valid — prepare for CleanCBS
-            _cbs = raw_cbs_map.get(_acc, {})
-            _to_create[_acc] = CleanCBS(
-                account_number=_acc,
-                province=_prov,
-                district=_dist_mapped,
-                municipality=_muni_mapped,
-                address_1=_cbs.get('address_1') or '',
-                address_3=_cbs.get('address_3') or '',
-                gender=_cbs.get('gender'),
-                dob=_cbs.get('dob'),
-                country_code=_cbs.get('country_code') or '01',
-            )
-
-    if _to_create:
-        CleanCBS.objects.bulk_create(_to_create.values(), ignore_conflicts=True)
-
     output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(output_dir, exist_ok=True)
 
@@ -1873,15 +1815,17 @@ def api_classify_municipality(request):
                 'address_1': item.get('address_1', ''),
                 'address_3': item.get('address_3', ''),
                 'needs': ai_needs,
+                'known_district': entry.get('district', ''),
             })
 
     # ---- Layer 2: AI classification — district and municipality ONLY ----
     if still_need_ai:
         SYSTEM_PROMPT = (
-            "You are a Nepal address classifier. Given address fields (address_1 and address_3) "
-            "from Nepali bank records, determine the district and/or municipality type.\n\n"
-            "You will ONLY be asked to classify \"district\" and/or \"municipality\". Never return province.\n\n"
-            "DISTRICT — return the exact name from this list (must include ' District' suffix):\n"
+            "You classify Nepali bank addresses into district and municipality type.\n"
+            "You will ONLY be asked for \"district\" and/or \"municipality\". NEVER return province.\n\n"
+
+            "=== DISTRICT ===\n"
+            "Return EXACTLY one from this list (include ' District' suffix):\n"
             "Bhojpur District, Dhankuta District, Ilam District, Jhapa District, Khotang District, "
             "Morang District, Okhaldhunga District, Panchthar District, Sankhuwasabha District, "
             "Solukhumbu District, Sunsari District, Taplejung District, Tehrathum District, "
@@ -1901,29 +1845,45 @@ def api_classify_municipality(request):
             "Salyan District, Surkhet District, Achham District, Baitadi District, "
             "Bajhang District, Bajura District, Dadeldhura District, Darchula District, "
             "Doti District, Kailali District, Kanchanpur District\n\n"
-            "MUNICIPALITY TYPE — classify based on the place name:\n"
-            "  MP = Metropolitan City (exactly 6 in Nepal): "
-            "Kathmandu MP, Pokhara MP, Lalitpur MP, Bharatpur MP, Biratnagar MP, Birgunj MP\n"
-            "  Sub MP = Sub-Metropolitan City (exactly 11): "
-            "Dharan, Hetauda, Butwal, Siddharthanagar, Itahari, Damak, "
-            "Janakpur, Dhangadhi, Tulsipur, Ghorahi, Mechinagar\n"
-            "  MC = Municipality: any named town, bazaar, or nagar that is an established municipality\n"
-            "  RM = Rural Municipality: village, gaun, rural VDC-era name, or any place not listed above\n\n"
-            "HINTS for classifying:\n"
-            "- address_3 often contains the town/village/VDC name — use it to identify the district\n"
-            "- address_1 may contain ward number, tole, or landmark — less useful for district\n"
-            "- If address says a well-known city (Kathmandu, Pokhara, Biratnagar etc.), it's MP\n"
-            "- If address mentions bazaar/chowk in a smaller town, likely MC\n"
-            "- If address mentions a VDC name or rural-sounding place, likely RM\n"
-            "- When uncertain between MC and RM, prefer RM (more common)\n\n"
-            "RULES:\n"
-            "1. Return ONLY the fields requested in brackets — nothing else\n"
-            "2. Use null if genuinely unresolvable from the address\n"
-            "3. Return ONLY a raw JSON object, no explanation, no markdown\n"
-            "4. Use the account number as-is for the JSON key (no brackets, no suffix)\n\n"
-            "Example output:\n"
-            '{"0600010012345000001": {"district": "Siraha District", "municipality": "MC"}, '
-            '"0600010067890000001": {"municipality": "RM"}}'
+
+            "=== MUNICIPALITY TYPE ===\n"
+            "There are exactly 4 types. You MUST pick one:\n\n"
+
+            "MP (Metropolitan City) — ONLY these 6 cities in all of Nepal:\n"
+            "  Kathmandu, Pokhara, Lalitpur, Bharatpur, Biratnagar, Birgunj\n"
+            "  If address is NOT one of these 6 cities, it is NOT MP.\n\n"
+
+            "Sub MP (Sub-Metropolitan City) — ONLY these 11 cities:\n"
+            "  Dharan, Hetauda, Butwal, Siddharthanagar, Itahari, Damak,\n"
+            "  Janakpur, Dhangadhi, Tulsipur, Ghorahi, Mechinagar\n"
+            "  If address is NOT one of these 11 cities, it is NOT Sub MP.\n\n"
+
+            "MC (Municipality / Nagarpalika) — an established urban municipality.\n"
+            "  Address typically contains a recognized town name like: Bidur, Baglung, Tansen,\n"
+            "  Banepa, Dhulikhel, Ilam, Ratnanagar, Kohalpur, Lahan, Rajbiraj, etc.\n"
+            "  These are well-known market towns and district headquarters.\n\n"
+
+            "RM (Rural Municipality / Gaunpalika) — everything else.\n"
+            "  Villages, rural VDC names, gaun, small settlements, any place that is NOT\n"
+            "  a recognized town. Examples: Dupcheshwor, Rautbeshi, Kakani, Galchi, Likhu,\n"
+            "  Helambu, Jugal, Bakaiya, etc.\n"
+            "  IMPORTANT: Most places in Nepal are RM. If you are unsure, choose RM.\n"
+            "  A place name containing 'Rural Municipality' or 'Gaunpalika' is always RM.\n\n"
+
+            "=== HOW TO DECIDE ===\n"
+            "1. address_3 usually has the place/town/VDC name — use it to identify district and type\n"
+            "2. address_1 has ward/tole/landmark — secondary clue\n"
+            "3. For district: match the place name to the district it belongs to\n"
+            "4. For municipality: check if the place is one of the 6 MP cities → MP.\n"
+            "   Else check if it is one of the 11 Sub MP cities → Sub MP.\n"
+            "   Else if it is a known town/bazaar/nagar → MC.\n"
+            "   Else → RM (default, most common).\n"
+            "5. If you cannot determine from the address, return null — do NOT guess.\n\n"
+
+            "=== OUTPUT FORMAT ===\n"
+            "Return ONLY a JSON object. No explanation, no markdown, no brackets in keys.\n"
+            '{"0600010012345000001": {"district": "Siraha District", "municipality": "RM"}, '
+            '"0600010067890000001": {"municipality": "MC"}}'
         )
 
         def _classify_batch(batch, client):
@@ -1932,7 +1892,12 @@ def api_classify_municipality(request):
                 addr1 = str(item.get('address_1') or '').strip()[:80]
                 addr3 = str(item.get('address_3') or '').strip()[:80]
                 needs_str = ', '.join(item['needs'])
-                lines.append(f"{item['account']} [needs: {needs_str}] address_1={addr1} | address_3={addr3}")
+                # Include known district if available — helps AI classify municipality
+                known_dist = item.get('known_district') or ''
+                ctx = f"address_1={addr1} | address_3={addr3}"
+                if known_dist:
+                    ctx += f" | district={known_dist}"
+                lines.append(f"{item['account']} [needs: {needs_str}] {ctx}")
             user_msg = "Classify these accounts:\n" + '\n'.join(lines)
 
             def _call(max_tokens):
@@ -2028,6 +1993,10 @@ def api_classify_municipality(request):
             if cbs_val and (not current or str(current).strip() == ''):
                 setattr(obj, field, cbs_val)
                 changed = True
+
+        if not obj.is_merchant:
+            obj.is_merchant = True
+            changed = True
 
         if changed:
             obj.save()
@@ -2146,6 +2115,9 @@ def review_missing_data(request, unique_id):
                 if val and not getattr(obj, field, None):
                     setattr(obj, field, val)
                     changed = True
+            if not obj.is_merchant:
+                obj.is_merchant = True
+                changed = True
             if changed:
                 obj.save()
         else:
@@ -2157,7 +2129,7 @@ def review_missing_data(request, unique_id):
                 if derived:
                     new_data['province'] = derived
             if new_data.get('province') and new_data.get('district') and new_data.get('municipality'):
-                CleanCBS.objects.create(account_number=acc, **{
+                CleanCBS.objects.create(account_number=acc, is_merchant=True, **{
                     k: v for k, v in new_data.items()
                     if k in ('province', 'district', 'municipality')
                 })
@@ -2229,6 +2201,8 @@ def apply_manual_mapping(request, unique_id):
                     derived = province_from_district(clean_obj.district)
                     if derived:
                         clean_obj.province = derived
+                if not clean_obj.is_merchant:
+                    clean_obj.is_merchant = True
                 # Only keep if complete
                 if clean_obj.province and clean_obj.district and clean_obj.municipality:
                     clean_obj.save()
@@ -2241,7 +2215,7 @@ def apply_manual_mapping(request, unique_id):
                     if derived:
                         fields['province'] = derived
                 if fields.get('province') and fields.get('district') and fields.get('municipality'):
-                    CleanCBS.objects.create(account_number=acc, **{
+                    CleanCBS.objects.create(account_number=acc, is_merchant=True, **{
                         k: v for k, v in fields.items()
                         if k in ('province', 'district', 'municipality')
                     })

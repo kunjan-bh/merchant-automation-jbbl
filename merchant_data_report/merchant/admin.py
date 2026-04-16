@@ -9,6 +9,6 @@ class CBSMerchantAdmin(admin.ModelAdmin):
 
 @admin.register(CleanCBS)
 class CleanCBSAdmin(admin.ModelAdmin):
-    list_display = ('account_number', 'province', 'district', 'municipality','address_3', 'address_1', 'gender', 'dob', 'country_code')
+    list_display = ('account_number', 'is_merchant', 'province', 'district', 'municipality','address_3', 'address_1', 'gender', 'dob', 'country_code')
     search_fields = ('account_number', 'province', 'district', 'municipality')
-    list_filter = ('gender', 'province', 'district')
+    list_filter = ('is_merchant', 'gender', 'province', 'district')
