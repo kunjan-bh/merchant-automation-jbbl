@@ -142,13 +142,76 @@
             background: #cbd5e1;
             border-radius: 4px;
         }
-        
+
+        .btn-ai {
+            background-color: #7c3aed;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 0.6rem 1.4rem;
+            transition: background-color 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .btn-ai:hover { background-color: #6d28d9; }
+        .btn-ai:disabled { background-color: #a78bfa; cursor: not-allowed; }
+
+        .ai-status {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            margin-left: 0.5rem;
+        }
+        .ai-badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #ede9fe;
+            color: #6d28d9;
+            margin-left: 4px;
+            vertical-align: middle;
+        }
+
+        .ai-progress-wrap {
+            display: none;
+            width: 100%;
+            background: #e5e7eb;
+            border-radius: 999px;
+            height: 8px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+        .ai-progress-bar {
+            height: 100%;
+            background: #7c3aed;
+            border-radius: 999px;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
     </style>
 </head>
 <body>
     <div class="container">
         <h2>Manual Data Mapping</h2>
         <p>Map missing geographical data based on Context Addresses. Blank values will be automatically treated as Unmatched/Null.</p>
+
+        <div style="margin-bottom:1.2rem;">
+            <div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+                <button type="button" class="btn-ai" id="btnAIClassify" onclick="aiClassifyGeo()">
+                    ✦ AI Classify Province / District / Municipality
+                </button>
+                <span class="ai-status" id="aiStatus"></span>
+            </div>
+            <div class="ai-progress-wrap" id="aiProgressWrap">
+                <div class="ai-progress-bar" id="aiProgressBar"></div>
+            </div>
+        </div>
         
         <form method="POST" action="{% url 'apply_manual_mapping' unique_id %}">
             {% csrf_token %}
@@ -182,7 +245,11 @@
                             <!-- Province Column -->
                             <td>
                                 {% if row.needs_province %}
-                                <select name="prov_{{ row.account_number }}">
+                                <select name="prov_{{ row.account_number }}"
+                                        data-account="{{ row.account_number }}"
+                                        data-address1="{{ row.address_1 }}"
+                                        data-address3="{{ row.address_3 }}"
+                                        class="prov-select">
                                     <option value="Ignore">-- Leave Null --</option>
                                     {% for p in provinces_list %}
                                     <option value="{{ p }}">{{ p }}</option>
@@ -196,7 +263,11 @@
                             <!-- District Column -->
                             <td>
                                 {% if row.needs_district %}
-                                <select name="dist_{{ row.account_number }}">
+                                <select name="dist_{{ row.account_number }}"
+                                        data-account="{{ row.account_number }}"
+                                        data-address1="{{ row.address_1 }}"
+                                        data-address3="{{ row.address_3 }}"
+                                        class="dist-select">
                                     <option value="Ignore">-- Leave Null --</option>
                                     {% for d in districts_list %}
                                     <option value="{{ d }}">{{ d }}</option>
@@ -210,7 +281,11 @@
                             <!-- Municipality Column -->
                             <td>
                                 {% if row.needs_municipality %}
-                                <select name="muni_{{ row.account_number }}">
+                                <select name="muni_{{ row.account_number }}"
+                                        data-account="{{ row.account_number }}"
+                                        data-address1="{{ row.address_1 }}"
+                                        data-address3="{{ row.address_3 }}"
+                                        class="muni-select">
                                     <option value="Ignore">-- Leave Null --</option>
                                     {% for cat in local_cats %}
                                     <option value="{{ cat }}">{{ cat }}</option>
@@ -254,6 +329,135 @@
     </div>
 
 <script>
+async function aiClassifyGeo() {
+    const btn          = document.getElementById('btnAIClassify');
+    const status       = document.getElementById('aiStatus');
+    const progressWrap = document.getElementById('aiProgressWrap');
+    const progressBar  = document.getElementById('aiProgressBar');
+
+    // Collect unique accounts that still need classification (skip already-filled dropdowns)
+    const isUnfilled = sel => sel && (sel.value === 'Ignore' || sel.value === '');
+    const accountMap = {};
+    document.querySelectorAll('select.prov-select').forEach(s => {
+        if (!isUnfilled(s)) return;  // already filled — skip
+        const a = s.dataset.account;
+        if (!accountMap[a]) accountMap[a] = {account: a, address_1: s.dataset.address1, address_3: s.dataset.address3};
+        accountMap[a].provSel = s;
+    });
+    document.querySelectorAll('select.dist-select').forEach(s => {
+        if (!isUnfilled(s)) return;
+        const a = s.dataset.account;
+        if (!accountMap[a]) accountMap[a] = {account: a, address_1: s.dataset.address1, address_3: s.dataset.address3};
+        accountMap[a].distSel = s;
+    });
+    document.querySelectorAll('select.muni-select').forEach(s => {
+        if (!isUnfilled(s)) return;
+        const a = s.dataset.account;
+        if (!accountMap[a]) accountMap[a] = {account: a, address_1: s.dataset.address1, address_3: s.dataset.address3};
+        accountMap[a].muniSel = s;
+    });
+
+    const accounts = Object.values(accountMap);
+    if (accounts.length === 0) {
+        status.textContent = 'No missing geographical fields to classify.';
+        return;
+    }
+
+    const BATCH_SIZE = 10;
+    const batches = [];
+    for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
+        batches.push(accounts.slice(i, i + BATCH_SIZE));
+    }
+    const totalBatches = batches.length;
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Classifying…';
+    progressWrap.style.display = 'block';
+    progressBar.style.width = '0%';
+
+    const allResults = {};
+
+    try {
+        for (let b = 0; b < totalBatches; b++) {
+            status.textContent = `Batch ${b + 1} of ${totalBatches} — ${batches[b].length} account(s)…`;
+            progressBar.style.width = `${Math.round((b / totalBatches) * 100)}%`;
+
+            const payload = batches[b].map(a => ({
+                account:            a.account,
+                address_1:          a.address_1,
+                address_3:          a.address_3,
+                needs_province:     !!a.provSel,
+                needs_district:     !!a.distSel,
+                needs_municipality: !!a.muniSel,
+            }));
+
+            const resp = await fetch('/api/classify-municipality/', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken')},
+                body: JSON.stringify({ accounts: payload }),
+            });
+
+            const data = await resp.json();
+            if (!resp.ok || data.error) {
+                status.textContent = `✗ Error on batch ${b + 1}: ` + (data.error || resp.statusText);
+                btn.disabled = false;
+                btn.textContent = '✦ Re-classify';
+                progressWrap.style.display = 'none';
+                return;
+            }
+            Object.assign(allResults, data.results || {});
+
+            // Pace: 1 batch every 3s → max ~20 batches/min × 1450 tokens = ~29K tokens/min, under 30K limit
+            if (b < totalBatches - 1) await new Promise(r => setTimeout(r, 3000));
+        }
+
+        // Populate dropdowns
+        progressBar.style.width = '100%';
+        let filled = 0;
+        accounts.forEach(a => {
+            const res = allResults[a.account] || {};
+            [[a.provSel, res.province], [a.distSel, res.district], [a.muniSel, res.municipality]].forEach(([sel, val]) => {
+                if (!sel || !val) return;
+                sel.value = val;
+                if (!sel.nextElementSibling || !sel.nextElementSibling.classList.contains('ai-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'ai-badge';
+                    badge.title = 'AI suggestion — verify before submitting';
+                    badge.textContent = 'AI';
+                    sel.parentNode.insertBefore(badge, sel.nextSibling);
+                }
+                filled++;
+            });
+        });
+
+        status.textContent = `✓ Done — ${totalBatches} batch(es), ${filled} field(s) filled. Review before submitting.`;
+        btn.textContent = '✦ Re-classify';
+        btn.disabled = false;
+        setTimeout(() => { progressWrap.style.display = 'none'; }, 1500);
+
+    } catch (err) {
+        status.textContent = '✗ Network error: ' + err.message;
+        btn.disabled = false;
+        btn.textContent = '✦ AI Classify Province / District / Municipality';
+        progressWrap.style.display = 'none';
+    }
+}
+
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let cookie of cookies) {
+            cookie = cookie.trim();
+            if (cookie.startsWith(name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
 function proceedWithoutUpdates() {
     const btn = document.getElementById('btnCancel');
     btn.disabled = true;

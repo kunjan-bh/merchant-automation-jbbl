@@ -15,4 +15,5 @@ urlpatterns = [
     path('api/start/', views.api_start, name='api_start'),
     path('api/progress/<str:unique_id>/', views.api_progress, name='api_progress'),
     path('api/finalize/<str:unique_id>/', views.api_finalize, name='api_finalize'),
+    path('api/classify-municipality/', views.api_classify_municipality, name='api_classify_municipality'),
 ]

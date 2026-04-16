@@ -20,7 +20,7 @@ import random
 from datetime import date, datetime, timedelta
 
 import pandas as pd
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side
 from django.conf import settings
 
 from .models import CleanCBS
@@ -312,166 +312,149 @@ def load_rows(uid):
 def write_sheet_11_users(writer, mb_stats, ips_stats):
     """Append the '11.Users' sheet to the existing workbook.
 
-    Layout matches the NRB format shown in the reference screenshot:
+    Styled identically to Sheets 3-10: bold headers, thin borders, no fills/colours.
+
+    Layout:
+      Title row (merged) + sub-title row (merged)
       Table 1 — Nationality × 8 channels
       Table 2 — Gender × 8 channels
       Table 3 — Age Group × 8 channels
     MB totals populate column B, Connect IPS totals populate column H.
-    Other channel columns are hard-zero (not yet wired for this project).
+    Other channel columns are hard-zero.
     """
+    from openpyxl.styles import Font, Alignment, Border, Side
+
     wb = writer.book
     if '11.Users' in wb.sheetnames:
         del wb['11.Users']
     ws = wb.create_sheet('11.Users')
 
-    # Styles
-    title_font = Font(name='Calibri', bold=True, size=12, color='FFFFFF')
-    header_font = Font(name='Calibri', bold=True, size=10, color='FFFFFF')
-    data_font = Font(name='Calibri', size=10)
-    total_font = Font(name='Calibri', bold=True, size=10)
-    title_fill = PatternFill(start_color='1B2631', end_color='1B2631', fill_type='solid')
-    header_fill = PatternFill(start_color='2E4057', end_color='2E4057', fill_type='solid')
-    sub_fill = PatternFill(start_color='AED6F1', end_color='AED6F1', fill_type='solid')
-    total_fill = PatternFill(start_color='D5E8D4', end_color='D5E8D4', fill_type='solid')
-    alt_fill = PatternFill(start_color='EBF5FB', end_color='EBF5FB', fill_type='solid')
-    thin = Border(left=Side(style='thin'), right=Side(style='thin'),
-                  top=Side(style='thin'), bottom=Side(style='thin'))
-    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    left = Alignment(horizontal='left', vertical='center')
+    # --- Same styles used by Sheets 3-10 in views.py ---
+    bold_font  = Font(bold=True)
+    plain_font = Font()
+    thin = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'),  bottom=Side(style='thin'),
+    )
+    center = Alignment(horizontal='center')
+    left   = Alignment(horizontal='left')
 
-    # Column widths (A..I)
-    widths = [32, 16, 16, 12, 12, 12, 12, 22, 10]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i)].width = w
+    NUM_COLS = 9   # label + 8 channel columns
 
     channel_headers = [
-        'Mobile Banking', 'Internet Banking', 'eWallets',
+        'Mobile Banking', 'Internet banking', 'eWallets',
         'Debit Cards', 'Credit Cards', 'Prepaid Cards',
-        'Faster Payment Systems', 'ACH'
+        'Faster Payment Systems', 'ACH',
     ]
 
-    def write_title(row, text):
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+    # ------------------------------------------------------------------ helpers
+
+    def _write_title(row, text):
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=NUM_COLS)
         c = ws.cell(row=row, column=1, value=text)
-        c.font = title_font
-        c.fill = title_fill
+        c.font   = bold_font
         c.alignment = center
-        ws.row_dimensions[row].height = 22
 
-    def write_headers(row, first_label):
-        hdrs = [first_label] + channel_headers
-        for ci, h in enumerate(hdrs, 1):
+    def _write_header_row(row, first_label):
+        for ci, h in enumerate([first_label] + channel_headers, 1):
             c = ws.cell(row=row, column=ci, value=h)
-            c.font = header_font
-            c.fill = header_fill
-            c.alignment = center
+            c.font   = bold_font
             c.border = thin
-        ws.row_dimensions[row].height = 30
+            c.alignment = center
 
-    def write_row(row, label, mb_val, ips_val, is_alt=False):
-        # columns: A=label, B=MB, C..G=0, H=IPS, I=0
+    def _write_data_row(row, label, mb_val, ips_val):
         vals = [label, mb_val, 0, 0, 0, 0, 0, ips_val, 0]
         for ci, v in enumerate(vals, 1):
             c = ws.cell(row=row, column=ci, value=v)
-            c.font = data_font
-            c.alignment = left if ci == 1 else center
+            c.font   = plain_font
             c.border = thin
-            if is_alt:
-                c.fill = alt_fill
-        ws.row_dimensions[row].height = 18
+            c.alignment = left if ci == 1 else center
 
-    def write_total(row, mb_total, ips_total):
+    def _write_total_row(row, mb_total, ips_total):
         vals = ['Total', mb_total, 0, 0, 0, 0, 0, ips_total, 0]
         for ci, v in enumerate(vals, 1):
             c = ws.cell(row=row, column=ci, value=v)
-            c.font = total_font
-            c.fill = total_fill
-            c.alignment = left if ci == 1 else center
+            c.font   = bold_font
             c.border = thin
-        ws.row_dimensions[row].height = 20
+            c.alignment = left if ci == 1 else center
 
-    def write_sub_header(row, label):
-        c = ws.cell(row=row, column=1, value=label)
-        c.font = Font(bold=True, size=10)
-        c.alignment = left
-        c.border = thin
-        c.fill = sub_fill
-        for ci in range(2, 10):
-            cc = ws.cell(row=row, column=ci)
-            cc.fill = sub_fill
-            cc.border = thin
-        ws.row_dimensions[row].height = 18
+    def _autofit(header_row, last_data_row):
+        for ci in range(1, NUM_COLS + 1):
+            max_len = 0
+            for ri in range(header_row, last_data_row + 1):
+                val = ws.cell(row=ri, column=ci).value
+                if val is not None:
+                    max_len = max(max_len, len(str(val)))
+            letter = ws.cell(row=header_row, column=ci).column_letter
+            ws.column_dimensions[letter].width = max(max_len + 2, 10)
 
-    mb_nat = mb_stats.get('nationality', {})
-    ips_nat = ips_stats.get('nationality', {})
-    mb_total = mb_stats.get('total', 0)
+    # ------------------------------------------------------------------ data
+
+    mb_nat    = mb_stats.get('nationality', {})
+    ips_nat   = ips_stats.get('nationality', {})
+    mb_total  = mb_stats.get('total', 0)
     ips_total = ips_stats.get('total', 0)
-
-    # ---- Title ----
-    row = 1
-    write_title(row, 'Digital Channel/Instrument/Systems Users as of Month End')
-    row += 1
-    write_title(row, '(Cumulative Number of Users as of Month End)')
-    row += 1
-
-    # ---- Table 1: Nationality ----
-    write_headers(row, 'Nationality')
-    row += 1
-    nat_rows = [
-        ('1. Nepalese', 'Nepalese', False),
-        ('2. Non-Nepalese', None, True),
-        ('2.1 Indian', 'Indian', False),
-        ('2.2. Chinese', 'Chinese', False),
-        ('2.3 Australian', 'Australian', False),
-        ('2.4 Srilanka', 'Srilankan', False),
-        ('2.5 USA', 'USA', False),
-        ('2.6 Others', 'Others', False),
-    ]
-    alt = False
-    for label, key, is_sub in nat_rows:
-        if is_sub:
-            write_sub_header(row, label)
-        else:
-            write_row(row, label, mb_nat.get(key, 0), ips_nat.get(key, 0), is_alt=alt)
-            alt = not alt
-        row += 1
-    write_total(row, mb_total, ips_total)
-    row += 2
-
-    # ---- Table 2: Gender ----
-    write_title(row, 'Gender-wise Distribution')
-    row += 1
-    write_headers(row, 'Gender')
-    row += 1
     mb_gender = mb_stats.get('gender', {})
     ips_gender = ips_stats.get('gender', {})
-    alt = False
-    for g in GENDER_BUCKETS:
-        write_row(row, g, mb_gender.get(g, 0), ips_gender.get(g, 0), is_alt=alt)
-        alt = not alt
+    mb_age    = mb_stats.get('age', {})
+    ips_age   = ips_stats.get('age', {})
+
+    # ------------------------------------------------------------------ layout
+
+    row = 1
+    _write_title(row, 'Digital Channel/Instrument/ Systems Users as of Month End')
+    row += 1
+    _write_title(row, '(Cumulative Number of Users as of Month End)')
+    row += 1
+
+    # Table 1 — Nationality
+    hdr_row_1 = row
+    _write_header_row(row, 'Nationality')
+    row += 1
+    nat_rows = [
+        ('1. Nepalese',     'Nepalese'),
+        ('2. Non-Nepalese', None),
+        ('2.1 Indian',      'Indian'),
+        ('2.2. Chinese',    'Chinese'),
+        ('2.3 Australian',  'Australian'),
+        ('2.4 Srilanka',    'Srilankan'),
+        ('2.5 USA',         'USA'),
+        ('2.6 Others',      'Others'),
+    ]
+    for label, key in nat_rows:
+        _write_data_row(row, label, mb_nat.get(key, 0) if key else 0,
+                        ips_nat.get(key, 0) if key else 0)
         row += 1
-    write_total(row, mb_total, ips_total)
+    _write_total_row(row, mb_total, ips_total)
+    _autofit(hdr_row_1, row)
+    row += 2   # blank separator row
+
+    # Table 2 — Gender
+    hdr_row_2 = row
+    _write_header_row(row, 'Gender')
+    row += 1
+    for g in GENDER_BUCKETS:
+        _write_data_row(row, g, mb_gender.get(g, 0), ips_gender.get(g, 0))
+        row += 1
+    _write_total_row(row, mb_total, ips_total)
+    _autofit(hdr_row_2, row)
     row += 2
 
-    # ---- Table 3: Age Group ----
-    write_title(row, 'Age Group-wise Distribution')
+    # Table 3 — Age Group
+    hdr_row_3 = row
+    _write_header_row(row, 'Age Group')
     row += 1
-    write_headers(row, 'Age Group')
-    row += 1
-    mb_age = mb_stats.get('age', {})
-    ips_age = ips_stats.get('age', {})
     age_row_labels = [
         ('Less than or equal to 18 years', '≤18 years'),
-        ('19-40 years', '19-40 years'),
-        ('41-65 years', '41-65 years'),
-        ('65+years', '65+ years'),
+        ('19-40 years',                    '19-40 years'),
+        ('41-65 years',                    '41-65 years'),
+        ('65+years',                       '65+ years'),
     ]
-    alt = False
     for label, key in age_row_labels:
-        write_row(row, label, mb_age.get(key, 0), ips_age.get(key, 0), is_alt=alt)
-        alt = not alt
+        _write_data_row(row, label, mb_age.get(key, 0), ips_age.get(key, 0))
         row += 1
-    write_total(row, mb_total, ips_total)
+    _write_total_row(row, mb_total, ips_total)
+    _autofit(hdr_row_3, row)
 
 
 # ---------------------------------------------------------------------------

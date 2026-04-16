@@ -3,3 +3,4 @@ merchant_data_report/venv
 ~$*.xlsx
 merchant_data_report/db.sqlite3
 merchant_data_report/media
+.env

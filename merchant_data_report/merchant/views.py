@@ -13,7 +13,7 @@ import threading
 import re
 from datetime import date, datetime, timedelta
 from .models import CBSMerchant, CleanCBS
-from .cbs_source import cbs_lookup, cbs_accounts_in_set, normalize_cbs_record
+from .cbs_source import cbs_lookup as _cbs_source_lookup, cbs_accounts_in_set, normalize_cbs_record
 from .country_codes import calculate_age as _calculate_age
 
 # --- HELPER FUNCTIONS ---
@@ -265,6 +265,22 @@ def _progress_path(uid):
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, f'progress_{uid}.json')
 
+# --- REPORT META (month, year, prepared/submitted by) ---
+
+def _meta_path(uid):
+    return os.path.join(settings.BASE_DIR, 'media', 'outputs', f'meta_{uid}.json')
+
+def _save_meta(uid, data):
+    with open(_meta_path(uid), 'w', encoding='utf-8') as f:
+        json.dump(data, f)
+
+def _load_meta(uid):
+    p = _meta_path(uid)
+    if os.path.exists(p):
+        with open(p, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
 def _set_progress(uid, step, status, detail='', extra=None):
     data = {'step': step, 'status': status, 'detail': detail}
     if extra:
@@ -301,7 +317,7 @@ def _ensure_clean_cbs(account_numbers):
         return
 
     # Single call to the CBS abstraction — swap cbs_lookup() for API when ready
-    cbs_map = cbs_lookup(accs)
+    cbs_map = _cbs_source_lookup(accs)
     if not cbs_map:
         return
 
@@ -361,9 +377,23 @@ def _ensure_clean_cbs(account_numbers):
 def perform_step1_and_2(file_or_path, unique_id, uid=None):
     """Core pipeline. Accepts file object or path. If uid is provided, tracks progress."""
     if uid: _set_progress(uid, 1, 'active', 'Reading Excel workbook...')
-    
-    fonepay_df = pd.read_excel(file_or_path, sheet_name='fonepay')
-    nepalpay_df = pd.read_excel(file_or_path, sheet_name='nepalpay')
+
+    try:
+        fonepay_df = pd.read_excel(file_or_path, sheet_name='fonepay')
+    except Exception:
+        raise ValueError(
+            "Could not find a sheet named 'fonepay' in the uploaded file. "
+            "Please make sure you uploaded the correct Total Merchant file "
+            "(e.g. 'TOTAL MERCHANT TILL ASOJ(Nepalpay fonepay).xlsx'), "
+            "not the Additional Payment Report."
+        )
+    try:
+        nepalpay_df = pd.read_excel(file_or_path, sheet_name='nepalpay')
+    except Exception:
+        raise ValueError(
+            "Could not find a sheet named 'nepalpay' in the uploaded file. "
+            "Please make sure you uploaded the correct Total Merchant file."
+        )
     
     if uid: _set_progress(uid, 2, 'active', f'Filtering columns — {len(fonepay_df):,} FonePay + {len(nepalpay_df):,} NepalPay records')
     
@@ -439,11 +469,35 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
     if uid: _set_progress(uid, 3, 'active', f'Querying CBS for {len(all_accounts):,} merchant accounts...')
     
     generate_mock_data(all_accounts, nepalpay_accs, source_null_province, source_null_district)
-    _ensure_clean_cbs(all_accounts)
 
-    all_cbs_data = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=all_accounts).values(
-        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3', 'gender', 'dob'
-    )))
+    # 1. Read CBS source directly (CBSMerchant) — no CleanCBS mirror needed
+    raw_cbs_map = _cbs_source_lookup(all_accounts)
+
+    # 2. Read CleanCBS corrections only (manual + AI — these are the real "clean" entries)
+    corrections_map = {}
+    for chunk in [list(all_accounts)[i:i+900] for i in range(0, len(all_accounts), 900)]:
+        for r in CleanCBS.objects.filter(account_number__in=chunk).values(
+            'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3', 'gender', 'dob'
+        ):
+            corrections_map[r['account_number']] = r
+
+    # 3. Merge: CBS base + CleanCBS overrides (CleanCBS wins for any non-empty field)
+    merged_rows = []
+    for acc in all_accounts:
+        cbs = raw_cbs_map.get(str(acc), {})
+        corr = corrections_map.get(str(acc), {})
+        merged_rows.append({
+            'account_number': str(acc),
+            'province':       corr.get('province')     or cbs.get('province')     or '',
+            'district':       corr.get('district')     or cbs.get('district')     or '',
+            'municipality':   corr.get('municipality') or cbs.get('municipality') or '',
+            'address_1':      corr.get('address_1')    or cbs.get('address_1')    or '',
+            'address_3':      corr.get('address_3')    or cbs.get('address_3')    or '',
+            'gender':         corr.get('gender')       or cbs.get('gender'),
+            'dob':            corr.get('dob')          or cbs.get('dob'),
+        })
+
+    all_cbs_data = pd.DataFrame(merged_rows)
     # Derive age dynamically from DOB so there's no stored-age staleness.
     if not all_cbs_data.empty:
         all_cbs_data['age'] = all_cbs_data['dob'].apply(lambda d: _calculate_age(d) if pd.notna(d) else None)
@@ -458,8 +512,9 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
     nepalpay_step2_df = nepalpay_df.copy()
 
     def safe_get_cbs(acc, col):
-        if not cbs_lookup.empty and acc in cbs_lookup.index:
-            val = cbs_lookup.loc[acc, col]
+        acc_str = str(acc).strip() if pd.notna(acc) else ""
+        if not cbs_lookup.empty and acc_str in cbs_lookup.index:
+            val = cbs_lookup.loc[acc_str, col]
             return val.iloc[0] if isinstance(val, pd.Series) else val
         return None
 
@@ -533,6 +588,11 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
 
 def _generate_final_report(unique_id):
     """Core report generation logic. Returns dict with result info."""
+    # Load report meta (month, year, prepared/submitted by) saved at upload time.
+    meta = _load_meta(unique_id)
+    month_name = meta.get('month', '')
+    year_val   = meta.get('year', '')
+
     f_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_fonepay_{unique_id}.xlsx')
     n_path1 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step1_nepalpay_{unique_id}.xlsx')
     f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
@@ -543,8 +603,8 @@ def _generate_final_report(unique_id):
     np_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'nepalpay_{unique_id}.xlsx')
     cl_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'cardless_{unique_id}.xlsx')
     
-    f_step2 = pd.read_excel(f_path2)
-    n_step2 = pd.read_excel(n_path2)
+    f_step2 = pd.read_excel(f_path2, dtype=str)
+    n_step2 = pd.read_excel(n_path2, dtype=str)
     f_acc_col = find_account_col(f_step2)
     n_acc_col = find_account_col(n_step2)
 
@@ -552,11 +612,11 @@ def _generate_final_report(unique_id):
     f_step1 = pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()
     n_step1 = pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()
 
-    try: card_df = pd.read_excel(c_path)
+    try: card_df = pd.read_excel(c_path, dtype=str)
     except: card_df = pd.DataFrame()
-    try: phonepay_df = pd.read_excel(p_path)
+    try: phonepay_df = pd.read_excel(p_path, dtype=str)
     except: phonepay_df = pd.DataFrame()
-    try: nepalpay_df = pd.read_excel(np_path)
+    try: nepalpay_df = pd.read_excel(np_path, dtype=str)
     except: nepalpay_df = pd.DataFrame()
     try:
         # Read once with header=None, detect header row, then re-slice in memory
@@ -599,17 +659,65 @@ def _generate_final_report(unique_id):
                         pp_acc_col = '_account_number'
                         break
 
+    # NepalPay payment-detail files contain a 'Merchant Account' column, but it can
+    # be outdated or inaccurate. Build a Merchant Code -> Account Number bridge from
+    # the step-2 NepalPay base data to ensure accurate CBS lookups.
+    debug_log = [f"--- DEBUG REPORT for {unique_id} ---"]
+    debug_log.append(f"pp_acc_col: {pp_acc_col}, phonepay empty: {phonepay_df.empty}, f_step2 empty: {f_step2.empty}")
+    if not nepalpay_df.empty and not n_step2.empty:
+        np_mid_s2 = find_col_by_norm(n_step2, 'merchantcode')
+        np_acc_s2 = find_account_col(n_step2)
+        debug_log.append(f"np_mid_s2: {np_mid_s2}, np_acc_s2: {np_acc_s2}")
+        if np_mid_s2 and np_acc_s2:
+            np_mid_to_acc = (
+                n_step2[[np_mid_s2, np_acc_s2]]
+                .dropna()
+                .set_index(n_step2[np_mid_s2].astype(str))[np_acc_s2]
+                .astype(str)
+                .to_dict()
+            )
+            for _mid_col in ['Merchant Code', 'MERCHANT_CODE', 'merchantcode', 'MerchantCode']:
+                if _mid_col in nepalpay_df.columns:
+                    _bridged = nepalpay_df[_mid_col].astype(str).map(np_mid_to_acc)
+                    debug_log.append(f"Found {_mid_col}. Bridged matches: {_bridged.notna().sum()}")
+                    if np2_acc_col and np2_acc_col in nepalpay_df.columns:
+                        nepalpay_df['_account_number'] = _bridged.fillna(nepalpay_df[np2_acc_col])
+                    else:
+                        nepalpay_df['_account_number'] = _bridged
+                    
+                    if nepalpay_df['_account_number'].notna().any():
+                        np2_acc_col = '_account_number'
+                        break
+
+    with open(os.path.join(settings.BASE_DIR, 'media', 'outputs', f'debug_log_{unique_id}.txt'), 'w') as f_dbg:
+        f_dbg.write("\n".join(debug_log))
+
     add_accs = set()
     if pp_acc_col: add_accs.update(phonepay_df[pp_acc_col].dropna().astype(str).tolist())
     if np2_acc_col: add_accs.update(nepalpay_df[np2_acc_col].dropna().astype(str).tolist())
 
     if add_accs:
-        # Sync CleanCBS from CBS source for all payment-detail accounts.
-        _ensure_clean_cbs(add_accs)
+        # Build lookup: CBSMerchant first, CleanCBS corrections override
+        raw_cbs_pay = _cbs_source_lookup(add_accs)
+        corr_pay = {}
+        for chunk in [list(add_accs)[i:i+900] for i in range(0, len(add_accs), 900)]:
+            for r in CleanCBS.objects.filter(account_number__in=chunk).values(
+                'account_number', 'province', 'district', 'municipality', 'gender'
+            ):
+                corr_pay[r['account_number']] = r
 
-        all_cbs_add = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=add_accs).values(
-            'account_number', 'province', 'district', 'municipality', 'gender'
-        )))
+        merged_pay = []
+        for acc in add_accs:
+            cbs  = raw_cbs_pay.get(str(acc), {})
+            corr = corr_pay.get(str(acc), {})
+            merged_pay.append({
+                'account_number': str(acc),
+                'province':     corr.get('province')     or cbs.get('province')     or '',
+                'district':     corr.get('district')     or cbs.get('district')     or '',
+                'municipality': corr.get('municipality') or cbs.get('municipality') or '',
+                'gender':       corr.get('gender')       or cbs.get('gender'),
+            })
+        all_cbs_add = pd.DataFrame(merged_pay)
         add_lookup = all_cbs_add.set_index('account_number') if not all_cbs_add.empty else pd.DataFrame()
         
         def patch_df_vectorized(df, acc_col, exclude_cols=None):
@@ -710,32 +818,74 @@ def _generate_final_report(unique_id):
                 if pn_clean in clean(c): return c
         return None
 
+    # Map functions keyed by field name — used to validate which column value is usable.
+    _geo_map_funcs = {
+        'province':     map_province,
+        'district':     map_district,
+        'municipality': map_local,
+    }
+
+    def _is_empty_series(s):
+        return s.isna() | (s.astype(str).str.strip() == '') | (s.astype(str).str.lower() == 'null')
+
     def get_norm_df_with_amount(df, acc_col, amt_cols):
+        """
+        Build a normalised per-transaction DataFrame.
+
+        Priority chain for geo fields:
+          1. Original file value maps successfully → keep it
+          2. CBS-patched column maps successfully → use it
+          3. Direct lookup from add_lookup (CBS+CleanCBS merged data) → use it
+          4. All fail → stays empty (manual review catches it)
+        """
         if df is None or df.empty: return pd.DataFrame()
         temp = pd.DataFrame()
-        temp['account_number'] = df[acc_col] if acc_col and acc_col in df.columns else None
+        temp['account_number'] = df[acc_col].astype(str) if acc_col and acc_col in df.columns else None
+
         for p in ['province', 'district', 'municipality', 'gender']:
-            # Use the FIRST matching column for province/district/municipality so the
-            # original data from the payment file ('PROVINCE', 'DISTRICT', 'MUNICIPALITY')
-            # takes priority over the CBS-patched lowercase column added later.
-            # The CBS-patched column still covers NepalPay (which has no original cols)
-            # and any rows where the original column is null.
-            first_col = last_col = None
+            # Collect all columns that normalise to this field name.
+            matching_cols = []
             for c in df.columns:
                 if str(c).lower().replace(' ', '').replace('_', '') == p:
-                    if first_col is None:
-                        first_col = c
-                    last_col = c
-            if first_col is None:
+                    matching_cols.append(c)
+
+            if not matching_cols:
                 temp[p] = None
-            elif first_col == last_col:
-                temp[p] = df[first_col]
+            elif len(matching_cols) == 1:
+                temp[p] = df[matching_cols[0]].values
             else:
-                # Coalesce: original (first) value when non-empty; fall back to CBS (last)
-                orig = df[first_col]
-                cbs  = df[last_col]
-                empty_mask = orig.isna() | (orig.astype(str).str.strip() == '') | (orig.astype(str).str.lower() == 'null')
-                temp[p] = orig.where(~empty_mask, cbs)
+                # Multiple columns: original file column (first) vs CBS-patched column (last).
+                orig_col = matching_cols[0]
+                cbs_col  = matching_cols[-1]
+                orig_vals = df[orig_col]
+                cbs_vals  = df[cbs_col]
+
+                mf = _geo_map_funcs.get(p)
+                if mf is not None:
+                    orig_usable = (~_is_empty_series(orig_vals)) & (orig_vals.apply(mf) != 'Unmatched')
+                    cbs_usable  = (~_is_empty_series(cbs_vals))  & (cbs_vals.apply(mf)  != 'Unmatched')
+                    result = orig_vals.copy().astype(object)
+                    result = result.where(orig_usable, cbs_vals.where(cbs_usable))
+                    temp[p] = result
+                else:
+                    orig_empty = _is_empty_series(orig_vals)
+                    temp[p] = orig_vals.where(~orig_empty, cbs_vals)
+
+            # SAFETY NET: fill any remaining NaN/empty directly from add_lookup.
+            # This catches cases where patch_df_vectorized didn't transfer CBS data
+            # (e.g. column wasn't picked up, format mismatch, or NepalPay with no
+            # original geo columns where the single CBS-patched col is still empty).
+            if acc_col and not add_lookup.empty and p in add_lookup.columns and temp['account_number'] is not None:
+                still_empty = _is_empty_series(temp[p])
+                mf = _geo_map_funcs.get(p)
+                if mf is not None:
+                    still_empty = still_empty | (temp[p].apply(mf) == 'Unmatched')
+                if still_empty.any():
+                    direct_vals = temp['account_number'].map(add_lookup[p])
+                    direct_valid = direct_vals.notna() & (direct_vals.astype(str).str.strip() != '') & (direct_vals.astype(str).str.lower() != 'null')
+                    fill_mask = still_empty & direct_valid
+                    if fill_mask.any():
+                        temp.loc[fill_mask, p] = direct_vals[fill_mask]
 
         amt_col = get_col_txns(df, amt_cols)
         temp['amount'] = pd.to_numeric(df[amt_col], errors='coerce').fillna(0) if amt_col else 0.0
@@ -744,6 +894,54 @@ def _generate_final_report(unique_id):
     pp_norm = get_norm_df_with_amount(phonepay_df, pp_acc_col, ['originalamount', 'amount'])
     np_norm = get_norm_df_with_amount(nepalpay_df, np2_acc_col, ['amount'])
     all_payment_df = pd.concat([pp_norm, np_norm], ignore_index=True)
+
+    # ---- DEBUG: trace where transactions are lost ----
+    import logging
+    _dbg = logging.getLogger('payment_debug')
+    _dbg.setLevel(logging.DEBUG)
+    if not _dbg.handlers:
+        _dbg.addHandler(logging.StreamHandler())
+    _dbg.debug(f"=== PAYMENT DEBUG ===")
+    _dbg.debug(f"phonepay rows: {len(phonepay_df)}, nepalpay rows: {len(nepalpay_df)}, total: {len(all_payment_df)}")
+    # --- NepalPay deep check ---
+    if np2_acc_col and np2_acc_col in nepalpay_df.columns:
+        _np_accs = nepalpay_df[np2_acc_col].dropna().astype(str).unique()
+        _dbg.debug(f"  NEPALPAY unique accounts: {len(_np_accs)}")
+        _dbg.debug(f"  NEPALPAY sample account numbers: {list(_np_accs[:5])}")
+        _dbg.debug(f"  NEPALPAY account dtype: {nepalpay_df[np2_acc_col].dtype}")
+        # How many are in add_lookup?
+        _in_lookup = sum(1 for a in _np_accs if a in add_lookup.index)
+        _dbg.debug(f"  NEPALPAY accounts in add_lookup: {_in_lookup}/{len(_np_accs)}")
+        # How many are in raw CBS?
+        _in_cbs = sum(1 for a in _np_accs if str(a) in raw_cbs_pay)
+        _dbg.debug(f"  NEPALPAY accounts in raw_cbs_pay: {_in_cbs}/{len(_np_accs)}")
+        # Sample add_lookup index
+        _dbg.debug(f"  add_lookup index sample: {list(add_lookup.index[:5])}")
+        _dbg.debug(f"  add_lookup index dtype: {add_lookup.index.dtype}")
+        # Check if province got patched for NepalPay
+        if 'province' in nepalpay_df.columns:
+            _np_prov_nan = nepalpay_df['province'].isna().sum()
+            _dbg.debug(f"  NEPALPAY province NaN AFTER patch: {_np_prov_nan}/{len(nepalpay_df)}")
+        else:
+            _dbg.debug(f"  NEPALPAY province column NOT FOUND after patch!")
+        # For accounts NOT in add_lookup, show them
+        _missing_from_lookup = [a for a in _np_accs if a not in add_lookup.index]
+        if _missing_from_lookup:
+            _dbg.debug(f"  NEPALPAY accounts NOT in add_lookup ({len(_missing_from_lookup)}): {_missing_from_lookup[:5]}")
+        # For accounts IN add_lookup but with empty province
+        _in_but_empty = [a for a in _np_accs if a in add_lookup.index and (pd.isna(add_lookup.loc[a, 'province']) or str(add_lookup.loc[a, 'province']).strip() in ('', 'None', 'nan', 'null'))]
+        _dbg.debug(f"  NEPALPAY accounts in add_lookup but empty province: {len(_in_but_empty)}")
+        if _in_but_empty:
+            _dbg.debug(f"    sample: {_in_but_empty[:3]}")
+    # Final result check
+    for _geo in ['province', 'district', 'municipality']:
+        if _geo in all_payment_df.columns:
+            _mf = {'province': map_province, 'district': map_district, 'municipality': map_local}[_geo]
+            _mapped = all_payment_df[_geo].apply(_mf)
+            _um = (_mapped == 'Unmatched').sum()
+            _dbg.debug(f"  FINAL {_geo}: unmatched={_um}/{len(all_payment_df)}")
+    _dbg.debug(f"=== END PAYMENT DEBUG ===")
+    # ---- END DEBUG ----
 
     def create_txns_report_format(all_data, target_col, cats, index_col_name, map_func=None):
         final_df = pd.DataFrame()
@@ -883,14 +1081,15 @@ def _generate_final_report(unique_id):
         apply_table_format(ws, len(g_df), len(g_df.columns))
 
         # --- Write Sheets 7 to 10 for Payment Details ---
-        write_sheet(df_province_pay, '7. Merchant Txns_Province', 'Province wise Merchant Transactions for the Month Ashwin')
-        write_sheet(df_district_pay, '8.Merchant Txns_District', 'District wise Transactions of Merchants for the Month Ashwin')
-        write_sheet(df_local_pay, '9.Merchant Txns_Local', 'Local Level Wise Merchant Transactions for the Month Ashwin')
-        
+        _m = month_name or 'the Month'
+        write_sheet(df_province_pay, '7. Merchant Txns_Province', f'Province wise Merchant Transactions for the Month {_m}')
+        write_sheet(df_district_pay, '8.Merchant Txns_District', f'District wise Transactions of Merchants for the Month {_m}')
+        write_sheet(df_local_pay, '9.Merchant Txns_Local', f'Local Level Wise Merchant Transactions for the Month {_m}')
+
         g_df_pay.to_excel(writer, sheet_name='10. Genderwise_Txn', startrow=1, index=False)
         ws_pay = writer.sheets['10. Genderwise_Txn']
         ws_pay.merge_cells('A1:C1')
-        ws_pay['A1'] = 'Transactions of Merchants Onboarded by Licensed Institutions-Gender Wise for the Month Ashwin'
+        ws_pay['A1'] = f'Transactions of Merchants Onboarded by Licensed Institutions-Gender Wise for the Month {_m}'
         ws_pay['A1'].font = header_font
         apply_table_format(ws_pay, len(g_df_pay), len(g_df_pay.columns))
         # ------------------------------------------------
@@ -1084,14 +1283,205 @@ def _generate_final_report(unique_id):
             print(f"[sheet11] ERROR — sheet omitted: {_e}\n{_tb.format_exc()}")
         # ---------------------------------------------------------------------
 
-        # Reorder sheets to put International and Domestic at the front (openpyxl specific)
+        # ── Home Page ──────────────────────────────────────────────────────────
+        from openpyxl.styles import Font as _Font, Alignment as _Align, PatternFill as _Fill, Border as _HpBorder, Side as _HpSide
         wb = writer.book
+        ws_hp = wb.create_sheet('Home Page')
+
+        # Exact colors from the manual report
+        _BG   = _Fill(start_color='F4B083', end_color='F4B083', fill_type='solid')   # orange bg
+        _THIN = _HpBorder(left=_HpSide(style='thin'), right=_HpSide(style='thin'),
+                          top=_HpSide(style='thin'),  bottom=_HpSide(style='thin'))
+
+        def _hp_cell(row, col, value, bold=False, size=14, halign='left',
+                     font_color='000000', bg=True, border=False):
+            c = ws_hp.cell(row=row, column=col, value=value)
+            c.font = _Font(bold=bold, size=size, color=font_color)
+            c.alignment = _Align(horizontal=halign, vertical='center')
+            if bg:
+                c.fill = _BG
+            if border:
+                c.border = _THIN
+            return c
+
+        # Paint orange background across A:C for all content rows
+        for r in range(1, 21):
+            for col in range(1, 4):   # A, B, C
+                ws_hp.cell(row=r, column=col).fill = _BG
+
+        # Title block  — merged B:C, orange bg
+        _hp_cell(1, 2, 'Nepal Rastra Bank',              bold=True, size=18, halign='center', font_color='FF0000')
+        _hp_cell(2, 2, 'Additional Reporting Format',    bold=True, size=15, halign='center')
+        _hp_cell(3, 2, 'Monthly/Quarterly/Yearly Reports', bold=True, size=11, halign='center')
+        ws_hp.merge_cells('B1:C1')
+        ws_hp.merge_cells('B2:C2')
+        ws_hp.merge_cells('B3:C3')
+
+        # Institution / month / year — label (orange, border), value (orange, border)
+        _hp_cell(4, 2, 'Name of the Institution', bold=True,  size=14, halign='right', border=True)
+        _hp_cell(4, 3, 'Jyoti Bikash Bank Ltd.',  bold=False, size=12, halign='left',  border=True)
+        _hp_cell(5, 2, 'Month',                   bold=False, size=14, halign='right', border=True)
+        _hp_cell(5, 3, month_name,                bold=False, size=14, halign='left',  border=True)
+        _hp_cell(6, 2, 'Year',                    bold=False, size=14, halign='right', border=True)
+        _hp_cell(6, 3, year_val,                  bold=False, size=14, halign='left',  border=True)
+
+        # Prepared by section
+        _hp_cell(8, 2, 'Prepared by', bold=True, size=14, halign='center', border=True)
+        ws_hp.merge_cells('B8:C8')
+        _hp_cell(9,  2, 'Name:',       bold=False, size=14, halign='right', border=True); _hp_cell(9,  3, '', border=True)
+        _hp_cell(10, 2, 'Position:',   bold=False, size=14, halign='right', border=True); _hp_cell(10, 3, '', border=True)
+        _hp_cell(11, 2, 'Email:',      bold=False, size=14, halign='right', border=True); _hp_cell(11, 3, '', border=True)
+        _hp_cell(12, 2, 'Mobile No.:', bold=False, size=14, halign='right', border=True); _hp_cell(12, 3, '', border=True)
+
+        # Submitted by section
+        _hp_cell(14, 2, 'Submitted by', bold=True, size=14, halign='center', border=True)
+        ws_hp.merge_cells('B14:C14')
+        _hp_cell(15, 2, 'Name:',       bold=False, size=14, halign='right', border=True); _hp_cell(15, 3, '', border=True)
+        _hp_cell(16, 2, 'Position:',   bold=False, size=14, halign='right', border=True); _hp_cell(16, 3, '', border=True)
+        _hp_cell(17, 2, 'Date:',       bold=False, size=14, halign='right', border=True); _hp_cell(17, 3, '', border=True)
+        _hp_cell(18, 2, 'Email:',      bold=False, size=14, halign='right', border=True); _hp_cell(18, 3, '', border=True)
+        _hp_cell(19, 2, 'Mobile No.:', bold=False, size=14, halign='right', border=True); _hp_cell(19, 3, '', border=True)
+
+        # Column widths & row heights for Home Page
+        ws_hp.column_dimensions['A'].width = 3
+        ws_hp.column_dimensions['B'].width = 28
+        ws_hp.column_dimensions['C'].width = 36
+        for r in range(1, 21):
+            ws_hp.row_dimensions[r].height = 20
+
+        # ── Glossary ────────────────────────────────────────────────────────────
+        ws_gl = wb.create_sheet('Glossary')
+        from openpyxl.styles import Border as _Border, Side as _Side
+        _gl_thin = _Border(
+            left=_Side(style='thin'), right=_Side(style='thin'),
+            top=_Side(style='thin'),  bottom=_Side(style='thin'),
+        )
+        gl_headers = ['S.N.', 'Particulars', 'Sheet No.', 'Definition']
+        for ci, h in enumerate(gl_headers, 1):
+            c = ws_gl.cell(row=1, column=ci, value=h)
+            c.font = _Font(bold=True)
+            c.border = _gl_thin
+            c.alignment = _Align(horizontal='center', vertical='center', wrap_text=True)
+
+        gl_rows = [
+            (1,  'Card Acquiring',
+             '1. International Transaction',
+             'Refers to transactions from international cards (debit, credit, prepaid) issued by foreign banks, acquired at Merchant terminals onboarded by licensed institutions in Nepal.'),
+            (2,  'Card Issuing',
+             '1. International Transaction',
+             'Refers to transactions from cards (debit, credit, prepaid) issued by Nepalese BFIs, acquired at Merchant terminals outside Nepal.'),
+            (3,  'QR Acquiring',
+             '1. International Transaction',
+             'Refers to transactions, originated from instruments issued by BFIs in other countries, acquired by Nepalese QR merchants in Nepal.'),
+            (4,  'QR Issuing',
+             '1. International Transaction',
+             'Refers to transactions, originated from instruments issued by licensed insitutions in Nepal, acquired by QR merchants in other countries.'),
+            (5,  ' Inward P2P Transfers',
+             '1. International Transaction',
+             'Refers to peer to peer transfer payments received from other countries '),
+            (6,  ' Outward P2P Transfers',
+             '1. International Transaction',
+             'Refers to peer to peer transfer payments made from Nepal to other countries'),
+            (7,  'Cardless Withdrawals Via ATM',
+             '2. Domestic Transaction',
+             'Refers to ATM withdrawals processed using mobile banking application, without using physical cards in the ATM terminal '),
+            (8,  'NFC Transactions in Merchant Terminals',
+             '2. Domestic Transaction',
+             'Refers to card-based transactions at merchant terminals using NFC or tap feature (without entering PIN)'),
+            (9,  'POS-enabled Merchants',
+             '2. Domestic Transaction',
+             'Refers to merchants onboarded by BFIs, accepting digital payments via Point-of-Sale (POS) machines'),
+            (10, 'QR-Enabled Merchants',
+             '2. Domestic Transaction',
+             'Refers to merchants onboarded by licensed institutions, accepting digital payments via QR Codes'),
+            (11, 'E-Commerce Enabled Merchants',
+             '2. Domestic Transaction',
+             'Refers to merchants onboarded by licensed institutions, operating e-commerce platforms/sites and accepting digital payments (checkout) through gateway integrations'),
+            (12, ' Merchants Onboarded by Licensed Institutions-Gender Wise As of Month End',
+             '6. Genderwise_merchant',
+             'Refers to data of merchants onboarded by licensed institutions, categorized based on the gender of the propreitor or the company (if the merchant is a company)'),
+            (13, 'Company',
+             '6. Genderwise Merchant',
+             'Refers to merchants, other than sole propreitorship, onboarded by licensed institutions. For sole proprietorship firms onboarded as merchants, licensed institutions are required to report the gender of the owner. Licensed institutions are required to report merchants other than sole propreitorship as company.'),
+            (14, 'Merchants Accepting Digital Payments (Onboarded by Licensed Insititutions) As of Month end ',
+             '3.,4.,5.',
+             'Refers to cumulative number of merchants onboarded by licensed institutions till the reporting period.'),
+            (15, 'Faster payment systems',
+             '11. Users',
+             'Refers to real-time fast payment systems like connectIPS, issued to customers by licensed institutions.'),
+            (16, 'ACH',
+             '11. Users',
+             'Refers to automated clearing house (ACH) systems, offering bulk debit or credit transfer facilities, extended to customers by banks and financial institutions.'),
+        ]
+        for ri, (sn, particulars, sheet_no, definition) in enumerate(gl_rows, 2):
+            vals = [sn, particulars, sheet_no, definition]
+            for ci, v in enumerate(vals, 1):
+                c = ws_gl.cell(row=ri, column=ci, value=v)
+                c.border = _gl_thin
+                c.alignment = _Align(horizontal='left', vertical='center', wrap_text=True)
+        # Column widths for Glossary
+        ws_gl.column_dimensions['A'].width = 6
+        ws_gl.column_dimensions['B'].width = 40
+        ws_gl.column_dimensions['C'].width = 24
+        ws_gl.column_dimensions['D'].width = 70
+        # Row heights for wrapped definition text
+        for ri in range(2, len(gl_rows) + 2):
+            ws_gl.row_dimensions[ri].height = 40
+
+        # ── Sheet 12: Digital Lending ───────────────────────────────────────────
+        ws_dl = wb.create_sheet('12.Digital Lending')
+        dl_headers = [
+            'S.N.', 'Product Name',
+            'Total Number of Outstanding Borrowers as of Month End',
+            'Total Number of New Loan Clients for the reporting Month',
+            'Total Sanctioned Loan Amount(NPR) in reporting month',
+            'Total Sanctioned Loan Amount (NPR) till Month End',
+            'Outstanding amount (NPR) till Month End',
+            'Non Performing Loans(NPR)-Substandard',
+            'Non Performing Loans(NPR)-Doubtful',
+            'Non Performing Loans(NPR)-Loss',
+            'NPL-Loss (Percentage)',
+        ]
+        from openpyxl.styles import Border as _Border, Side as _Side
+
+        _dl_thin = _Border(
+            left=_Side(style='thin'), right=_Side(style='thin'),
+            top=_Side(style='thin'),  bottom=_Side(style='thin'),
+        )
+        # Title row
+        ws_dl.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(dl_headers))
+        tc = ws_dl.cell(row=1, column=1, value='Digital Lending')
+        tc.font = _Font(bold=True)
+        tc.alignment = _Align(horizontal='center')
+        # Header row
+        for ci, h in enumerate(dl_headers, 1):
+            c = ws_dl.cell(row=2, column=ci, value=h)
+            c.font = _Font(bold=True)
+            c.border = _dl_thin
+            c.alignment = _Align(horizontal='center', wrap_text=True)
+        # 15 empty data rows with S.N.
+        for sn in range(1, 16):
+            for ci in range(1, len(dl_headers) + 1):
+                c = ws_dl.cell(row=sn + 2, column=ci, value=sn if ci == 1 else None)
+                c.border = _dl_thin
+        # Column widths
+        ws_dl.column_dimensions['A'].width = 6
+        ws_dl.column_dimensions['B'].width = 22
+        for col_letter in ['C','D','E','F','G','H','I','J','K']:
+            ws_dl.column_dimensions[col_letter].width = 18
+        ws_dl.row_dimensions[2].height = 40
+
+        # ── Reorder: Home Page → Glossary → International → Domestic → 3-12 ────
+        moved_hp = wb['Home Page']
+        moved_gl = wb['Glossary']
         moved_s1 = wb['1.International Transactions']
         moved_s2 = wb['2.Domestic Transactions']
-        wb._sheets.remove(moved_s1)
-        wb._sheets.remove(moved_s2)
-        wb._sheets.insert(0, moved_s1)
-        wb._sheets.insert(1, moved_s2)
+        for sheet in [moved_hp, moved_gl, moved_s1, moved_s2]:
+            wb._sheets.remove(sheet)
+        wb._sheets.insert(0, moved_hp)
+        wb._sheets.insert(1, moved_gl)
+        wb._sheets.insert(2, moved_s1)
+        wb._sheets.insert(3, moved_s2)
 
     return {
         'step3_filename': step3_filename,
@@ -1169,15 +1559,39 @@ def _check_payment_detail_missing(uid):
     if not add_accs:
         return {}
 
-    # Sync CleanCBS from CBS source for all payment-detail accounts.
-    _ensure_clean_cbs(add_accs)
+    # Direct CBS lookup + CleanCBS overlay (corrections take priority).
+    raw_cbs_pay2 = _cbs_source_lookup(add_accs)
+    corr_pay2 = {}
+    _SQL_CHUNK2 = 900
+    add_accs_list2 = list(add_accs)
+    for _i in range(0, len(add_accs_list2), _SQL_CHUNK2):
+        _chunk = add_accs_list2[_i:_i + _SQL_CHUNK2]
+        for _r in CleanCBS.objects.filter(account_number__in=_chunk).values(
+            'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3', 'gender'
+        ):
+            corr_pay2[_r['account_number']] = _r
 
-    cbs_rows = pd.DataFrame(list(CleanCBS.objects.filter(account_number__in=add_accs).values(
-        'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3', 'gender'
-    )))
-    if cbs_rows.empty:
+    # Only include accounts known to CBS or CleanCBS
+    merged_pay2 = []
+    for acc in add_accs:
+        cbs = raw_cbs_pay2.get(acc, {})
+        corr = corr_pay2.get(acc, {})
+        if not cbs and not corr:
+            continue  # not in CBS at all — skip
+        merged_pay2.append({
+            'account_number': acc,
+            'province':     corr.get('province')     or cbs.get('province')     or '',
+            'district':     corr.get('district')     or cbs.get('district')     or '',
+            'municipality': corr.get('municipality') or cbs.get('municipality') or '',
+            'address_1':    corr.get('address_1')    or cbs.get('address_1')    or '',
+            'address_3':    corr.get('address_3')    or cbs.get('address_3')    or '',
+            'gender':       corr.get('gender')       or cbs.get('gender'),
+        })
+
+    if not merged_pay2:
         return {}
-    cbs_pay_lookup = cbs_rows.set_index('account_number')
+    cbs_rows2 = pd.DataFrame(merged_pay2)
+    cbs_pay_lookup = cbs_rows2.set_index('account_number')
 
     missing_dict = {}
     for acc in add_accs:
@@ -1314,6 +1728,12 @@ def api_start(request):
     save_file(mobile_banking, 'mb_users')
     save_file(connect_ips, 'ips_users')
 
+    # Save report meta (month, year) for use at finalize time.
+    _save_meta(uid, {
+        'month': request.POST.get('month', ''),
+        'year':  request.POST.get('year', ''),
+    })
+
     _set_progress(uid, 0, 'started', 'Pipeline initiated')
 
     t = threading.Thread(target=_run_pipeline, args=(tmp_path, uid), daemon=True)
@@ -1347,6 +1767,137 @@ def api_finalize(request, unique_id):
     return JsonResponse({'status': 'pending'})
 
 
+def api_classify_municipality(request):
+    """
+    POST { "accounts": [ {"account": "...", "address_1": "...", "address_3": "...",
+                          "needs_province": true, "needs_district": true, "needs_municipality": true}, ... ] }
+    Returns { "results": { "<account>": {"province": "Bagmati", "district": "Kathmandu District", "municipality": "MC"}, ... } }
+    Classifies whichever fields are needed, saves results to CleanCBS for future runs.
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    try:
+        body = json.loads(request.body)
+        accounts = body.get('accounts', [])
+    except (json.JSONDecodeError, KeyError):
+        return JsonResponse({'error': 'Invalid JSON body'}, status=400)
+
+    if not accounts:
+        return JsonResponse({'results': {}})
+
+    VALID_PROVINCES = set(provinces_list)
+    VALID_DISTRICTS = set(districts_list)
+    VALID_MUNI      = {'MP', 'MC', 'Sub MP', 'RM'}
+
+    SYSTEM_PROMPT = (
+        "You are a Nepal address classifier. For each account classify the requested fields using the place names in the address.\n\n"
+        "Valid provinces: Koshi, Madhesh, Bagmati, Gandaki, Lumbini, Karnali, Sudurpaschim\n\n"
+        "Valid districts — use exact spelling with ' District' suffix. All 77 Nepal districts are valid.\n\n"
+        "Valid municipality types:\n"
+        "  MP  = Metropolitan City (Kathmandu, Pokhara, Lalitpur, Bharatpur, Biratnagar, Birgunj, "
+        "Dharan, Hetauda, Butwal, Siddharthanagar, Madhyapur Thimi, Mechinagar)\n"
+        "  Sub MP = Sub-Metropolitan City (Dhankuta, Itahari, Damak, Birtamod, Urlabari, Bhadrapur, "
+        "Inaruwa, Rajbiraj, Lahan, Janakpur, Malangwa, Kalaiya, Simara, Bharatpur already MP, "
+        "Ratnanagar, Bhimdatt, Dhangadhi, Tulsipur, Ghorahi)\n"
+        "  MC  = Municipality (any named town/bazaar that is a municipality — e.g. Tansen, Khairahani, "
+        "Belkotgadhi, Bhimeshwor, Dhulikhel, Panauti, Banepa, Bidur, Trishuli, Damauli, Waling, "
+        "Putalibazar, Baglung, Musikot, Liwang, Salyan, Surkhet, Dipayal, Tikapur, Lamki)\n"
+        "  RM  = Rural Municipality (village, gaun, VDC-era names, rural areas)\n\n"
+        "Rules:\n"
+        "- Be aggressive — if you recognise the place name as a known Nepal settlement, classify it.\n"
+        "- Only return null if the address text gives truly no usable location information.\n"
+        "- Province mapping hints: Kathmandu/Lalitpur/Bhaktapur/Chitwan → Bagmati; "
+        "Kaski/Pokhara → Gandaki; Jhapa/Morang/Sunsari → Koshi; "
+        "Rupandehi/Kapilvastu/Palpa → Lumbini; Kailali/Kanchanpur → Sudurpaschim; "
+        "Dhanusha/Sarlahi/Mahottari → Madhesh; Surkhet/Dailekh/Jumla → Karnali.\n\n"
+        "Return ONLY a JSON object — no explanation, no markdown:\n"
+        '{"<account>": {"province": "Bagmati", "district": "Kathmandu District", "municipality": "MC"}, ...}\n'
+        "Include only the keys that were requested. Use null for genuinely unresolvable values."
+    )
+
+    def _classify_batch(batch, client):
+        lines = []
+        for item in batch:
+            addr1 = str(item.get('address_1') or '').strip()[:60]
+            addr3 = str(item.get('address_3') or '').strip()[:60]
+            needs = []
+            if item.get('needs_province'):     needs.append('province')
+            if item.get('needs_district'):     needs.append('district')
+            if item.get('needs_municipality'): needs.append('municipality')
+            lines.append(f"{item['account']} [{','.join(needs)}]: {addr1}|{addr3}")
+        user_msg = "Classify:\n" + '\n'.join(lines)
+
+        def _call(max_tokens):
+            resp = client.chat.completions.create(
+                model='llama-3.1-8b-instant',
+                max_completion_tokens=max_tokens,
+                temperature=0,
+                messages=[
+                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {'role': 'user', 'content': user_msg},
+                ]
+            )
+            raw = resp.choices[0].message.content.strip()
+            if raw.startswith('```'):
+                raw = re.sub(r'^```[a-z]*\n?', '', raw)
+                raw = re.sub(r'\n?```$', '', raw)
+            return json.loads(raw)
+
+        try:
+            return _call(1200)
+        except (json.JSONDecodeError, ValueError):
+            # Retry with higher token budget in case response was cut off
+            return _call(2000)
+
+    try:
+        from groq import Groq
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY is not set in .env")
+
+        client = Groq(api_key=api_key)
+        all_results = {}
+
+        # One API call per batch of 10 (keeps output well under token limit)
+        batch_size = 10
+        for i in range(0, len(accounts), batch_size):
+            batch_results = _classify_batch(accounts[i:i + batch_size], client)
+            all_results.update(batch_results)
+
+        # Validate each field against allowed values
+        clean = {}
+        for acc, fields in all_results.items():
+            if not isinstance(fields, dict):
+                continue
+            entry = {}
+            prov = fields.get('province')
+            dist = fields.get('district')
+            muni = fields.get('municipality')
+            if prov in VALID_PROVINCES:        entry['province']     = prov
+            if dist in VALID_DISTRICTS:        entry['district']     = dist
+            if muni in VALID_MUNI:             entry['municipality'] = muni
+            clean[acc] = entry
+
+        # Persist to CleanCBS — never overwrite an existing non-empty value
+        for acc, fields in clean.items():
+            if not fields:
+                continue
+            obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
+            changed = False
+            for field in ('province', 'district', 'municipality'):
+                val = fields.get(field)
+                if val and not getattr(obj, field, None):
+                    setattr(obj, field, val)
+                    changed = True
+            if changed:
+                obj.save()
+
+        return JsonResponse({'results': clean})
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
 # --- LEGACY VIEWS (review, apply, finalize page, download) ---
 
 def review_missing_data(request, unique_id):
@@ -1371,32 +1922,106 @@ def review_missing_data(request, unique_id):
             data['platform'] = 'Nepal Pay'
             all_missing.append(data)
 
-    # Fetch address + presence from the CBS abstraction layer.
-    # cbs_lookup() is authoritative; CleanCBS is fallback for manually-added accounts.
+    if not all_missing:
+        return render(request, 'merchant/review_missing_data.html', {
+            'unique_id': unique_id, 'missing_records': [],
+            'provinces_list': provinces_list, 'districts_list': districts_list,
+            'local_cats': local_cats, 'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
+        })
+
     all_accs = [d['account_number'] for d in all_missing]
 
-    cbs_data = cbs_lookup(all_accs)          # single call — swap for API later
-    in_cbs   = set(cbs_data.keys())
-
-    # Fallback addresses from CleanCBS for accounts not in CBS
-    clean_addr = {}
-    missing_from_cbs = [a for a in all_accs if a not in in_cbs]
-    for chunk in [missing_from_cbs[i:i+900] for i in range(0, len(missing_from_cbs), 900)]:
+    # Fresh lookup: CBS first, then CleanCBS corrections
+    cbs_data = _cbs_source_lookup(all_accs)
+    corrections = {}
+    for chunk in [all_accs[i:i+900] for i in range(0, len(all_accs), 900)]:
         for r in CleanCBS.objects.filter(account_number__in=chunk).values(
-            'account_number', 'address_1', 'address_3'
+            'account_number', 'province', 'district', 'municipality', 'address_1', 'address_3'
         ):
-            clean_addr[r['account_number']] = r
+            corrections[r['account_number']] = r
 
+    # For each missing field, try to resolve from CBS/CleanCBS right now.
+    # Anything resolvable: patch step2 file + save to CleanCBS. Only show truly unresolvable.
+    _mappers = {'province': map_province, 'district': map_district, 'municipality': map_local}
+    f_patches, n_patches = {}, {}
+
+    truly_missing = []
     for d in all_missing:
         acc = d['account_number']
-        r = cbs_data.get(acc) or clean_addr.get(acc, {})
+        cbs  = cbs_data.get(acc, {})
+        corr = corrections.get(acc, {})
+        patches = f_patches if d['platform'] == 'FonePay' else n_patches
+
+        still_needs = {'province': False, 'district': False, 'municipality': False}
+        for field in ('province', 'district', 'municipality'):
+            if not d.get(f'needs_{field}'):
+                continue
+            # CleanCBS first, CBS fallback
+            raw_val = corr.get(field) or cbs.get(field) or ''
+            resolved = _mappers[field](raw_val)
+            if resolved != 'Unmatched' and raw_val:
+                # Resolvable — patch step2 and CleanCBS
+                if acc not in patches:
+                    patches[acc] = {}
+                patches[acc][field] = raw_val
+            else:
+                still_needs[field] = True
+
+        # Only keep in review if at least one field is still unresolvable
+        if any(still_needs.values()):
+            d['needs_province']     = still_needs['province']
+            d['needs_district']     = still_needs['district']
+            d['needs_municipality'] = still_needs['municipality']
+            truly_missing.append(d)
+
+    # Patch step2 Excel files with auto-resolved values
+    def _patch_df(df, patches):
+        acc_col = find_account_col(df)
+        if not acc_col or not patches:
+            return df, False
+        changed = False
+        for idx, row in df.iterrows():
+            acc = str(row.get(acc_col, '')).strip()
+            if acc in patches:
+                for col, val in patches[acc].items():
+                    if col in df.columns and is_empty(row.get(col)):
+                        df.at[idx, col] = val
+                        changed = True
+        return df, changed
+
+    f_step2, f_changed = _patch_df(f_step2, f_patches)
+    n_step2, n_changed = _patch_df(n_step2, n_patches)
+    if f_changed: f_step2.to_excel(f_path2, index=False)
+    if n_changed: n_step2.to_excel(n_path2, index=False)
+
+    # Persist auto-resolved values to CleanCBS
+    all_patches = {}
+    for patches in (f_patches, n_patches):
+        for acc, fields in patches.items():
+            if acc not in all_patches:
+                all_patches[acc] = {}
+            all_patches[acc].update(fields)
+    for acc, fields in all_patches.items():
+        obj, _ = CleanCBS.objects.get_or_create(account_number=acc)
+        changed = False
+        for field, val in fields.items():
+            if val and not getattr(obj, field, None):
+                setattr(obj, field, val)
+                changed = True
+        if changed:
+            obj.save()
+
+    # Populate address + CBS presence for display
+    for d in truly_missing:
+        acc = d['account_number']
+        r = cbs_data.get(acc) or corrections.get(acc, {})
         d['address_1']  = r.get('address_1') or ''
         d['address_3']  = r.get('address_3') or ''
-        d['not_in_cbs'] = acc not in in_cbs
+        d['not_in_cbs'] = acc not in cbs_data
 
     return render(request, 'merchant/review_missing_data.html', {
         'unique_id': unique_id,
-        'missing_records': all_missing,
+        'missing_records': truly_missing,
         'provinces_list': provinces_list,
         'districts_list': districts_list,
         'local_cats': local_cats,
@@ -1408,8 +2033,8 @@ def apply_manual_mapping(request, unique_id):
         f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
         n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
         
-        f_step2 = pd.read_excel(f_path2)
-        n_step2 = pd.read_excel(n_path2)
+        f_step2 = pd.read_excel(f_path2, dtype=str)
+        n_step2 = pd.read_excel(n_path2, dtype=str)
         
         f_acc_col = find_account_col(f_step2)
         n_acc_col = find_account_col(n_step2)
@@ -1448,8 +2073,22 @@ def apply_manual_mapping(request, unique_id):
                 setattr(clean_obj, col, val)
             clean_obj.save()
 
-        messages.success(request, 'Successfully applied manual data mappings!')
-        return redirect('finalize_report', unique_id=unique_id)
+        # Kick off final report generation in background then return to main page
+        _set_progress(unique_id, 8, 'active', 'Generating final report...')
+        def _run():
+            try:
+                report = _generate_final_report(unique_id)
+                _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
+                    'unique_id': unique_id,
+                    'step3_filename': report['step3_filename'],
+                })
+            except Exception as e:
+                _set_progress(unique_id, -1, 'error', str(e))
+            finally:
+                connection.close()
+        threading.Thread(target=_run, daemon=True).start()
+        from django.http import HttpResponseRedirect
+        return HttpResponseRedirect(f'/?resume={unique_id}')
     return redirect('upload_merchant_data')
 
 def finalize_report(request, unique_id):

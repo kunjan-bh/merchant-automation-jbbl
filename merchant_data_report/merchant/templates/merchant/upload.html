@@ -262,6 +262,19 @@
         .file-group label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-main); }
         .file-group input[type="file"] { width: 100%; font-size: 0.8rem; padding: 0.5rem; border: 1px dashed #d1d5db; border-radius: 6px; background: #fdfdfd; cursor: pointer; }
         .file-group input[type="file"]::file-selector-button { background: var(--blue-bg); border: 1px solid #cce4f6; color: var(--blue); padding: 4px 8px; border-radius: 4px; font-weight: 500; margin-right: 8px; cursor: pointer; }
+
+        /* ── Report Meta Fields ── */
+        .meta-section { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
+        .meta-section h3 { font-size: 0.9rem; font-weight: 600; color: var(--text-main); margin-bottom: 1rem; }
+        .meta-group { margin-bottom: 0.75rem; }
+        .meta-group label { display: block; font-size: 0.8rem; font-weight: 500; margin-bottom: 0.3rem; color: var(--text-dim); }
+        .meta-group input, .meta-group select {
+            width: 100%; padding: 0.45rem 0.6rem; font-size: 0.85rem; font-family: inherit;
+            border: 1px solid #d1d5db; border-radius: 6px; background: #fdfdfd; color: var(--text-main);
+            outline: none; transition: border-color 0.15s;
+        }
+        .meta-group input:focus, .meta-group select:focus { border-color: var(--blue); }
+        .meta-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
     </style>
 </head>
 <body>
@@ -319,6 +332,28 @@
                 <label>Connect IPS Users Data</label>
                 <input type="file" name="connect_ips" id="connectIpsInput" accept=".xlsx,.xls,.csv" required>
             </div>
+
+            <!-- Report Meta -->
+            <div class="meta-section">
+                <h3>Report Details</h3>
+                <div class="meta-row">
+                    <div class="meta-group">
+                        <label>Month</label>
+                        <select name="month" id="monthSelect">
+                            <option value="">— select —</option>
+                            <option>Baisakh</option><option>Jestha</option><option>Ashadh</option>
+                            <option>Shrawan</option><option>Bhadra</option><option selected>Ashwin</option>
+                            <option>Kartik</option><option>Mangsir</option><option>Poush</option>
+                            <option>Magh</option><option>Falgun</option><option>Chaitra</option>
+                        </select>
+                    </div>
+                    <div class="meta-group">
+                        <label>Year (BS)</label>
+                        <input type="number" name="year" id="yearInput" placeholder="e.g. 2082" value="2082" min="2070" max="2100">
+                    </div>
+                </div>
+            </div>
+            <!-- /Report Meta -->
 
             <button type="submit" class="btn-go" id="goBtn">
                 Proceed

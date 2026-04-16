@@ -64,9 +64,21 @@ def normalize_cbs_record(raw):
         s = _clean(val)
         return s.strip() if s else '01'
 
+    # Nepal province numeric codes → canonical text names
+    _PROVINCE_CODES = {
+        '1': 'Koshi', '01': 'Koshi', '001': 'Koshi',
+        '2': 'Madhesh', '02': 'Madhesh', '002': 'Madhesh',
+        '3': 'Bagmati', '03': 'Bagmati', '003': 'Bagmati',
+        '4': 'Gandaki', '04': 'Gandaki', '004': 'Gandaki',
+        '5': 'Lumbini', '05': 'Lumbini', '005': 'Lumbini',
+        '6': 'Karnali', '06': 'Karnali', '006': 'Karnali',
+        '7': 'Sudurpaschim', '07': 'Sudurpaschim', '007': 'Sudurpaschim',
+    }
+
     # Accept both CBS export column names and Django field names
     acc   = _clean(raw.get('MainCode')      or raw.get('account_number'))
     prov  = _clean(raw.get('PState')        or raw.get('province'))       or ''
+    prov  = _PROVINCE_CODES.get(prov.strip(), prov)   # normalize numeric → text
     dist  = _clean(raw.get('M_DistName')    or raw.get('district'))       or ''
     addr1 = _clean(raw.get('Address1')      or raw.get('address_1'))      or ''
     addr3 = _clean(raw.get('Address3')      or raw.get('address_3'))      or ''

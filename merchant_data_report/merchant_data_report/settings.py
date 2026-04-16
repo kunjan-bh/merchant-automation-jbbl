@@ -9,11 +9,15 @@ https://docs.djangoproject.com/en/5.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
-
+import os
+from dotenv import load_dotenv
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# .env lives one level above the Django project root (in code,3,4,5,6/)
+load_dotenv(BASE_DIR.parent / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -26,6 +30,10 @@ SECRET_KEY = 'django-insecure-69c97$dch^0gd8p2#s51@rm8(p1gv=ux7h73z+r8ky)cycrvd1
 DEBUG = True
 
 ALLOWED_HOSTS = []
+
+# Each review row has up to 4 dropdowns (province, district, municipality, gender).
+# With hundreds of merchants the default 1000-field limit is easily exceeded.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
 
 
 # Application definition
