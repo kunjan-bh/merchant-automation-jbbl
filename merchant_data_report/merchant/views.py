@@ -427,8 +427,14 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
             if np_dist_col and is_empty(row.get(np_dist_col)):
                 source_null_district.add(acc)
 
+    # Mark accounts from input file as confirmed merchants in CleanCBS
+    _acc_list = [str(a) for a in all_accounts]
+    for _chunk in [_acc_list[i:i+900] for i in range(0, len(_acc_list), 900)]:
+        CleanCBS.objects.filter(account_number__in=_chunk, is_merchant__isnull=True).update(is_merchant=True)
+        CleanCBS.objects.filter(account_number__in=_chunk, is_merchant=False).update(is_merchant=True)
+
     if uid: _set_progress(uid, 3, 'active', f'Querying CBS for {len(all_accounts):,} merchant accounts...')
-    
+
     generate_mock_data(all_accounts, nepalpay_accs, source_null_province, source_null_district)
 
     # 1. Read CBS source directly (CBSMerchant) — no CleanCBS mirror needed
@@ -1974,7 +1980,9 @@ def api_classify_municipality(request):
         if not (fields.get('province') and fields.get('district') and fields.get('municipality')):
             continue  # incomplete — don't save
 
-        obj, created = CleanCBS.objects.get_or_create(account_number=acc)
+        obj, created = CleanCBS.objects.get_or_create(account_number=acc, defaults={'is_merchant': True})
+        if created or not obj.is_merchant:
+            obj.is_merchant = True
 
         # Never overwrite a non-empty field
         changed = False
@@ -2434,7 +2442,7 @@ def payment_detail_apply(request, unique_id):
                 if derived:
                     fields['province'] = derived
             if fields.get('province') and fields.get('district') and fields.get('municipality'):
-                CleanCBS.objects.create(account_number=acc, **{
+                CleanCBS.objects.create(account_number=acc, is_merchant=True, **{
                     k: v for k, v in fields.items()
                     if k in ('province', 'district', 'municipality')
                 })

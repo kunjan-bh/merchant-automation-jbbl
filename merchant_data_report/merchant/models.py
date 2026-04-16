@@ -44,7 +44,8 @@ class CleanCBS(models.Model):
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True, verbose_name="Gender")
     dob = models.DateField(blank=True, null=True, verbose_name="Date of Birth")
     country_code = models.CharField(max_length=10, blank=True, null=True, default='01', verbose_name="Country Code")
-    is_merchant = models.BooleanField(default=False, verbose_name="Is Merchant")
+    # None = neutral (from CBS, unknown), True = confirmed merchant (in input file), False = confirmed non-merchant
+    is_merchant = models.BooleanField(default=None, null=True, blank=True, verbose_name="Is Merchant")
 
     class Meta:
         verbose_name = "Clean CBS Record"
