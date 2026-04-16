@@ -223,6 +223,120 @@ def province_from_district(district_str):
     d = str(district_str).strip().replace(' District', '').lower()
     return _DISTRICT_TO_PROVINCE.get(d)
 
+# ---------------------------------------------------------------------------
+# Address-based municipality type classifier (deterministic, no AI)
+# Adapted from excel_files/add_municipality_type.py
+# ---------------------------------------------------------------------------
+_MP_CITIES = {"kathmandu", "lalitpur", "bharatpur", "pokhara", "biratnagar", "birgunj"}
+_SUB_MP_CITIES = {"dharan", "itahari", "hetauda", "butwal", "siddharthanagar", "dhangadhi",
+                  "tulsipur", "ghorahi", "janakpur", "kirtipur", "madhyapur thimi"}
+_MC_TOWNS = {
+    "inaruwa", "duhabi", "rajbiraj", "lahan", "siraha", "triyuga", "diktel rupakot majhuwagadhi",
+    "phungling", "ilam", "birtamod", "damak", "mechinagar", "urlabari", "belbari", "rangeli",
+    "sundar haraicha", "letang bhogateni", "budhabare", "kankai", "phidim", "taplejung", "khandbari",
+    "chainpur", "bhojpur", "dhankuta", "pakhribas", "hile", "tehrathum", "myanglung", "solududhkunda",
+    "salleri", "kalaiya", "gaur", "malangwa", "jaleshwar", "lalbandi", "bardibas", "mirchaiya",
+    "hanumannagar kankalini", "golbazar", "kamala", "chandranigahapur", "garuda", "gadhimai",
+    "simraungarh", "kolhabi", "ishworpur", "kariyamai", "pokhariya", "bindabasini", "dewahi gonahi",
+    "baudihawa", "sursand", "pipra", "bidur", "trisuli", "belkotgadhi", "dupcheshwar", "suryagadhi",
+    "kakani", "kageshwari manohara", "budhanilkantha", "gokarneshwor", "tokha", "tarakeshwor",
+    "chandragiri", "dakshinkali", "konjyosom", "mahalaxmi", "godawari", "bagmati", "makwanpurgadhi",
+    "thaha", "manahari", "raksirang", "kailash", "bhimphedi", "dhulikhel", "panauti", "panchkhal",
+    "namobuddha", "charikot", "dolakha", "jiri", "gaurishankar", "ramechhap", "manthali", "doramba",
+    "likhu tamakoshi", "sindhuli", "kamalamai", "sunkoshi", "tinpatan", "golanjor", "hariharpurgadhi",
+    "dudhauli", "chautara sangachowk gadhi", "balephi", "helambu", "jugal", "bhotekoshi", "indrawati",
+    "melamchi", "nuwakot", "tadi", "panchpokhari thangpaldhap", "waling", "putalibazar", "bhirkot",
+    "arjunchaupari", "galyang", "harinas", "biruwa", "annapurna", "machhapuchchhre", "rupa", "madi",
+    "beshishahar", "rainas", "sundarbazar", "dordi", "dudhpokhari", "marsyangdi", "gorkha", "palungtar",
+    "arughat", "barpak sulikot", "tsum nubri", "siranchok", "ajirkot", "manang ngisyang", "mustang",
+    "gharapjhong", "lomanthang", "thasang", "baglung", "dhorpatan", "bareng", "kanthekhola",
+    "nisikhola", "jaimini", "burtibang", "myagde", "bandipur", "bhimad", "dulegaunda", "nawlpur",
+    "aanbukhaireni", "rishing", "kushma", "phalewas", "modi", "painyu", "tansen", "rampur", "ribdikot",
+    "nisdi", "tinau", "rambha", "mathagadhi", "devdaha", "saljhandi", "omsatiya", "sammarimai",
+    "kanchan", "marchawari", "sunwal", "pratappur", "lamahi", "shantinagar", "rajpur", "babai",
+    "rapti", "barbardiya", "bheriganga", "geruwa", "bansgadhi", "thakurbaba", "badhaiatal",
+    "krishnanagar", "narainapur", "kohalpur", "raptisonari", "kapilvastu", "banganga", "maharajgunj",
+    "shivaraj", "buddhabhumi", "yashodhara", "bijaynagar", "suddhodhan", "palhi nandan", "rohini",
+    "pyuthan", "sarumarani", "mallarani", "naubahini", "mandavi", "jhimruk", "arghakhanchi",
+    "sandhikharka", "panini", "bhumekasthan", "chhatradev", "jumla", "chandannath", "tatopani",
+    "tila", "sinja", "kanakasundari", "hima", "dunai", "thuli bheri", "tripurasundari", "she phoksundo",
+    "jagadulla", "mudkechula", "dolpo buddha", "simkot", "namkha", "soru", "chhayanath rara",
+    "khatyad", "kalikot", "raskot", "tilagufa", "pachaljharana", "palata", "naraharinath",
+    "sanni triveni", "dailekh", "dullu", "bhagawatimai", "dungeshwar", "chamunda bindrasaini",
+    "gurans", "aathabis", "mahabu", "naumule", "bhairabi", "rukum east", "bhume", "sisne", "jajarkot",
+    "barekot", "shivalaya", "nalgad", "chhedagad", "kushe", "birendranagar", "gurbhakot", "lekbeshi",
+    "panchapuri", "bhimdatta", "shuklaphanta", "bedkot", "daijee", "punarbas", "mahakali",
+    "lamkichuha", "ghodaghodi", "tikapur", "bhajani", "joshipur", "bardagoriya", "chure",
+    "dipayal silgadhi", "bogtan fudsil", "purbichauki", "badikedar", "jorayal", "sayal", "shikhar",
+    "mangalsen", "sanphebagar", "ramaroshan", "dhakari", "bannigadhi jayagadh", "mellekh",
+    "chaurpati", "turmakhand", "jayaprithvi", "bungal", "talkot", "khaptad chhanna", "masta",
+    "chhapiya", "durgathali", "kedarsyu", "saipal", "budhinanda", "tribeni", "himali", "badimalika",
+    "budhiganga", "gaumul", "swamikartik khapar", "dasharathchand", "melauli", "patan (baitadi)",
+    "purchaudi", "surnaya", "sigas", "dogadakedar", "dilasaini", "shailyashikhar", "naugad",
+    "malikarjun", "apihimal", "duhun", "dunhu", "lekam", "marma",
+}
+
+
+def classify_municipality_from_address(addr1, addr3):
+    """
+    Classify municipality type from address text using keyword matching
+    and official name lists. Returns 'MP'/'Sub MP'/'MC'/'RM' on positive
+    match, or None if no confident classification could be made.
+
+    Priority: addr3 first (usually has place name), then addr1.
+    Only returns a value on POSITIVE match — never defaults to RM blindly.
+    """
+    def _classify_one(text):
+        if not text or not isinstance(text, str):
+            return None
+        text_lower = text.lower().strip()
+        if not text_lower:
+            return None
+
+        # Keyword matching (most reliable)
+        if "rural municipality" in text_lower or "gaunpalika" in text_lower:
+            return 'RM'
+        if "sub-metropolitan" in text_lower or "sub metropolitan" in text_lower:
+            return 'Sub MP'
+        if "metropolitan" in text_lower or "metropolitian" in text_lower:
+            return 'MP'
+        if "municipality" in text_lower or "nagarpalika" in text_lower:
+            return 'MC'
+
+        # Name-list matching — exact match on normalized text
+        norm = ' '.join(text_lower.replace("municipality", "").replace("rural", "")
+                        .replace("metropolitan city", "").replace("sub metropolitan", "").split())
+        if norm in _MP_CITIES:
+            return 'MP'
+        if norm in _SUB_MP_CITIES:
+            return 'Sub MP'
+        if norm in _MC_TOWNS:
+            return 'MC'
+
+        # Contains-match — address like "BARDIBAS-2,MAHOTTARI" or "BIRGUNJ MAISTHAN-12"
+        # Check if any known city/town name appears in the text
+        # MP/Sub MP lists are small and high-confidence, so safe to contains-match
+        for city in _MP_CITIES:
+            if city in text_lower:
+                return 'MP'
+        for city in _SUB_MP_CITIES:
+            if city in text_lower:
+                return 'Sub MP'
+        # MC contains-match: only for names >= 4 chars to avoid false positives
+        for town in _MC_TOWNS:
+            if len(town) >= 4 and town in text_lower:
+                return 'MC'
+
+        return None  # no confident match — don't guess
+
+    # Try addr3 first (usually has place/town name)
+    result = _classify_one(str(addr3) if addr3 else '')
+    if result:
+        return result
+    # Fallback to addr1
+    return _classify_one(str(addr1) if addr1 else '')
+
+
 def map_district(d):
     if pd.isna(d) or str(d).strip() == '': return 'Unmatched'
     d_str = str(d).strip().title()
@@ -1810,18 +1924,41 @@ def api_classify_municipality(request):
 
         resolved[acc] = entry
 
-        # Only district and municipality go to AI — never province
+    # ---- Layer 1.5: Address-based municipality classification (deterministic) ----
+    # Uses keyword matching + official name lists from add_municipality_type.py
+    # Runs before AI — fast and accurate for addresses containing explicit type keywords
+    for item in accounts:
+        acc = item['account']
+        if resolved[acc].get('municipality'):
+            continue  # already resolved from CBS
+        if not item.get('needs_municipality'):
+            continue
+        addr1 = item.get('address_1', '')
+        addr3 = item.get('address_3', '')
+        # Also try CBS address data if input addresses are empty
+        cbs = cbs_data.get(acc, {})
+        if not addr1: addr1 = cbs.get('address_1', '')
+        if not addr3: addr3 = cbs.get('address_3', '')
+        muni_type = classify_municipality_from_address(addr1, addr3)
+        if muni_type:
+            resolved[acc]['municipality'] = muni_type
+
+    # Build AI list — only accounts still missing fields after CBS + address classification
+    still_need_ai = []
+    for item in accounts:
+        acc = item['account']
         ai_needs = []
-        if not entry.get('district')     and item.get('needs_district'):     ai_needs.append('district')
-        if not entry.get('municipality') and item.get('needs_municipality'): ai_needs.append('municipality')
+        if not resolved[acc].get('district')     and item.get('needs_district'):     ai_needs.append('district')
+        if not resolved[acc].get('municipality') and item.get('needs_municipality'): ai_needs.append('municipality')
 
         if ai_needs:
+            cbs = cbs_data.get(acc, {})
             still_need_ai.append({
                 'account': acc,
-                'address_1': item.get('address_1', ''),
-                'address_3': item.get('address_3', ''),
+                'address_1': item.get('address_1', '') or cbs.get('address_1', ''),
+                'address_3': item.get('address_3', '') or cbs.get('address_3', ''),
                 'needs': ai_needs,
-                'known_district': entry.get('district', ''),
+                'known_district': resolved[acc].get('district', ''),
             })
 
     # ---- Layer 2: AI classification — district and municipality ONLY ----
@@ -2080,6 +2217,17 @@ def review_missing_data(request, unique_id):
                 patches[acc][field] = raw_val
             else:
                 still_needs[field] = True
+
+        # Address-based municipality classification (before showing manual review)
+        if still_needs.get('municipality'):
+            addr1 = cbs.get('address_1') or corr.get('address_1') or d.get('address_1', '')
+            addr3 = cbs.get('address_3') or corr.get('address_3') or d.get('address_3', '')
+            muni_type = classify_municipality_from_address(addr1, addr3)
+            if muni_type:
+                if acc not in patches:
+                    patches[acc] = {}
+                patches[acc]['municipality'] = muni_type
+                still_needs['municipality'] = False
 
         # Only keep in review if at least one field is still unresolvable
         if any(still_needs.values()):
