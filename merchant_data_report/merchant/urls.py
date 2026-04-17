@@ -10,6 +10,7 @@ urlpatterns = [
     path('payment-review/<str:unique_id>/', views.payment_detail_review, name='payment_detail_review'),
     path('payment-apply/<str:unique_id>/', views.payment_detail_apply, name='payment_detail_apply'),
     path('finalize/<str:unique_id>/', views.finalize_report, name='finalize_report'),
+    path('review-download/<str:unique_id>/', views.download_review_list, name='download_review_list'),
     path('download/<str:filename>/', views.download_sheet, name='download_sheet'),
     # API endpoints for real-time progress tracking
     path('api/start/', views.api_start, name='api_start'),

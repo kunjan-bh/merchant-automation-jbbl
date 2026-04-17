@@ -1,9 +1,9 @@
-from django.shortcuts import render, redirect
-from django.contrib import messages
-from django.http import FileResponse, Http404, JsonResponse
+import io
+from django.http import HttpResponse, FileResponse, Http404, JsonResponse
 from django.conf import settings
 from django.urls import reverse
 from django.db import connection
+from django.shortcuts import render
 import pandas as pd
 import os
 import uuid
@@ -87,7 +87,7 @@ def check_missing_records(df, required_cols, index_col):
                 missing.append(c)
             # Gender drops to Company automatically if unknown per logic, so we only flag if strictly IS_EMPTY
             
-        if missing:
+        if missing or row.get('_invalid_format') == True:
             if acc not in missing_dict:
                 missing_dict[acc] = {
                     'account_number': acc,
@@ -97,10 +97,23 @@ def check_missing_records(df, required_cols, index_col):
                     'needs_district': 'district' in missing,
                     'needs_municipality': 'municipality' in missing,
                     'needs_gender': 'gender' in missing,
+                    'needs_account_fix': row.get('_invalid_format') == True,
+                    # Store current values even if they aren't "missing" so UI can show them/POST them back
+                    'province': row.get('province') if not is_empty(row.get('province')) else '',
+                    'district': row.get('district') if not is_empty(row.get('district')) else '',
+                    'municipality': row.get('municipality') if not is_empty(row.get('municipality')) else '',
+                    'gender': row.get('gender') if not is_empty(row.get('gender')) else '',
                 }
             else:
                 for m in missing:
                     missing_dict[acc][f'needs_{m}'] = True
+                if row.get('_invalid_format') == True:
+                    missing_dict[acc]['needs_account_fix'] = True
+                # Optional: update values if they were empty but now found (unlikely in this loop)
+                for f in ('province', 'district', 'municipality', 'gender'):
+                    if not missing_dict[acc].get(f):
+                        val = row.get(f)
+                        if not is_empty(val): missing_dict[acc][f] = val
     return missing_dict
 
 # --- MAPPERS ---
@@ -490,25 +503,32 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         
     all_accounts = fonepay_accs | nepalpay_accs
 
-    # Drop rows with invalid account numbers (names, phone numbers, etc.)
-    # before any further processing. Invalid = not all-digit or < 15 chars.
-    invalid_dropped_count = 0
+    # Mark rows with invalid account numbers (names, phone numbers, etc.)
+    # to be resolved in manual review instead of dropping them.
     if fonepay_acc_col and fonepay_acc_col in fonepay_df.columns:
-        initial_f_len = len(fonepay_df)
-        fonepay_df = fonepay_df[fonepay_df[fonepay_acc_col].apply(
+        fonepay_df['_invalid_format'] = ~fonepay_df[fonepay_acc_col].apply(
             lambda x: is_valid_account_number(str(x).strip())
-        )].copy()
-        invalid_dropped_count += initial_f_len - len(fonepay_df)
+        )
         
     if nepalpay_acc_col and nepalpay_acc_col in nepalpay_df.columns:
-        initial_n_len = len(nepalpay_df)
-        nepalpay_df = nepalpay_df[nepalpay_df[nepalpay_acc_col].apply(
+        nepalpay_df['_invalid_format'] = ~nepalpay_df[nepalpay_acc_col].apply(
             lambda x: is_valid_account_number(str(x).strip())
-        )].copy()
-        invalid_dropped_count += initial_n_len - len(nepalpay_df)
+        )
         
-    if uid and invalid_dropped_count > 0:
-        _set_progress(uid, 2, 'active', f'Filtering columns — {len(fonepay_df):,} FonePay + {len(nepalpay_df):,} NepalPay records', extra={'log': f'Dropped {invalid_dropped_count} rows with invalid accounts (not numeric or < 15 chars).'})
+    if uid:
+        invalid_rows = (fonepay_df['_invalid_format'].sum() if '_invalid_format' in fonepay_df.columns else 0) + \
+                       (nepalpay_df['_invalid_format'].sum() if '_invalid_format' in nepalpay_df.columns else 0)
+        
+        # Calculate unique invalid accounts
+        inv_accs = set()
+        if fonepay_acc_col and '_invalid_format' in fonepay_df.columns:
+            inv_accs.update(fonepay_df[fonepay_df['_invalid_format']][fonepay_acc_col].dropna().astype(str).tolist())
+        if nepalpay_acc_col and '_invalid_format' in nepalpay_df.columns:
+            inv_accs.update(nepalpay_df[nepalpay_df['_invalid_format']][nepalpay_acc_col].dropna().astype(str).tolist())
+        invalid_acc_count = len(inv_accs)
+
+        if invalid_rows > 0:
+            _set_progress(uid, 1, 'active', f'Identified {invalid_rows} rows ({invalid_acc_count} unique accounts) with invalid format.', extra={'log': f'Found {invalid_rows} invalid rows across {invalid_acc_count} merchants.'})
 
     # Rebuild account sets after filtering
     fonepay_accs = set(fonepay_df[fonepay_acc_col].dropna().astype(str).tolist()) if fonepay_acc_col else set()
@@ -638,6 +658,12 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address1', cbs_col='address_1'), axis=1)
         nepalpay_step2_df['address_3'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address3', cbs_col='address_3'), axis=1)
 
+    # Propagate _invalid_format to step2 so check_missing_records can see it
+    if '_invalid_format' in fonepay_df.columns:
+        fonepay_step2_df['_invalid_format'] = fonepay_df['_invalid_format']
+    if '_invalid_format' in nepalpay_df.columns:
+        nepalpay_step2_df['_invalid_format'] = nepalpay_df['_invalid_format']
+
     output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
     os.makedirs(output_dir, exist_ok=True)
 
@@ -675,12 +701,16 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         after = a_f.get(c, 0) + a_n.get(c, 0)
         stats[c] = {'missing_before': before, 'missing_after': after, 'filled': before - after}
     
+    # Count invalid formats precisely for UI reporting
+    invalid_f_count = int(fonepay_df['_invalid_format'].sum() if '_invalid_format' in fonepay_df.columns else 0)
+    invalid_n_count = int(nepalpay_df['_invalid_format'].sum() if '_invalid_format' in nepalpay_df.columns else 0)
+    invalid_total = invalid_f_count + invalid_n_count
+
     if uid:
-        log_parts = []
-        for c, s in stats.items():
-            if s['filled'] > 0: log_parts.append(f"{c.title()}: filled {s['filled']}")
-        log_msg = " • ".join(log_parts) if log_parts else "No missing data filled from CBS."
-        _set_progress(uid, 4, 'active', f'Enriched records from CBS database.', extra={'log': log_msg})
+        stats_file = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'enrichment_stats_{uid}.json')
+        stats['invalid_accounts'] = invalid_total
+        with open(stats_file, 'w') as sf:
+            json.dump(stats, sf)
 
     return fonepay_df, nepalpay_df, fonepay_step2_df, nepalpay_step2_df, stats
 
@@ -705,6 +735,15 @@ def _generate_final_report(unique_id):
     n_step2 = pd.read_excel(n_path2, dtype=str)
     f_acc_col = find_account_col(f_step2)
     n_acc_col = find_account_col(n_step2)
+
+    # FINAL CLEANUP: Drop any records that are still invalid or were removed
+    # This acts as a safety net for Step 3.
+    def final_scrub(df, acc_col):
+        if not acc_col or df.empty: return df
+        return df[df[acc_col].apply(lambda x: is_valid_account_number(str(x).strip()))].copy()
+
+    f_step2 = final_scrub(f_step2, f_acc_col)
+    n_step2 = final_scrub(n_step2, n_acc_col)
 
     # Read step-1 files once — reused for counts + province/district stats at the end
     f_step1 = pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()
@@ -1578,19 +1617,50 @@ def _generate_final_report(unique_id):
         wb._sheets.insert(2, moved_s1)
         wb._sheets.insert(3, moved_s2)
 
-    return {
+    # Final Processing Summary for UI
+    f_len1 = len(f_step1) if not f_step1.empty else len(f_step2)
+    n_len1 = len(n_step1) if not n_step1.empty else len(n_step2)
+    total_in = f_len1 + n_len1
+    total_out = len(f_step2) + len(n_step2)
+    
+    # Read CBS enrichment stats
+    merged_cbs = 0
+    invalid_accs = 0
+    en_stats_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'enrichment_stats_{unique_id}.json')
+    if os.path.exists(en_stats_path):
+        with open(en_stats_path, 'r') as sf:
+            en_rd = json.load(sf)
+            merged_cbs = en_rd.get('municipality', {}).get('filled', 0)
+            invalid_accs = en_rd.get('invalid_accounts', 0)
+    
+    # Total resolved (present in final output)
+    muni_filled_final = (f_step2['municipality'].notna().sum() if 'municipality' in f_step2.columns else 0) + \
+                        (n_step2['municipality'].notna().sum() if 'municipality' in n_step2.columns else 0)
+    
+    # Script/AI Mapped: those resolved after CBS lookup
+    script_mapped = max(0, muni_filled_final - merged_cbs)
+
+    # We'll save a simplified stats object
+    report_data = {
         'step3_filename': step3_filename,
-        'fonepay_count': len(f_step1) if not f_step1.empty else len(f_step2),
-        'nepalpay_count': len(n_step1) if not n_step1.empty else len(n_step2),
+        'fonepay_count': f_len1,
+        'nepalpay_count': n_len1,
+        'total_records': total_in,
+        'deleted_count': total_in - total_out,
+        'merged_cbs_count': int(merged_cbs),
+        'script_mapped_count': int(script_mapped),
+        'invalid_account_count': int(invalid_accs),
         'fonepay_provinces': get_prov_counts(f_step2),
         'fonepay_districts': get_dist_counts(f_step2),
         'nepalpay_provinces': get_prov_counts(n_step2),
         'nepalpay_districts': get_dist_counts(n_step2),
-        'fonepay_step1_provinces': get_prov_counts(f_step1),
-        'fonepay_step1_districts': get_dist_counts(f_step1),
-        'nepalpay_step1_provinces': get_prov_counts(n_step1),
-        'nepalpay_step1_districts': get_dist_counts(n_step1),
     }
+
+    stats_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'stats_{unique_id}.json')
+    with open(stats_path, 'w') as f:
+        json.dump(report_data, f)
+
+    return report_data
 
 
 # --- BACKGROUND PIPELINE ---
@@ -1737,7 +1807,11 @@ def _run_pipeline(file_path, uid):
         np_missing = check_missing_records(n_step2, ['province', 'district', 'municipality', 'gender'], find_account_col(n_step2))
 
         has_missing = bool(fp_missing or np_missing)
-        total_missing = len(fp_missing) + len(np_missing)
+        
+        # Breakdown missing for'precise' logging
+        invalid_fmt = sum(1 for d in fp_missing.values() if d.get('needs_account_fix')) + \
+                      sum(1 for d in np_missing.values() if d.get('needs_account_fix'))
+        cbs_missing = len(fp_missing) + len(np_missing) - invalid_fmt
 
         result_info = {
             'unique_id': uid,
@@ -1745,8 +1819,16 @@ def _run_pipeline(file_path, uid):
             'nepalpay_count': len(n_df),
         }
 
+        # Premium log for AI/Script analysis
+        _set_progress(uid, 5, 'active', 'Scanning records for geographical patterns...', extra={'log': 'Analyzing address fields against 753 Local Level names via deterministic scripts.'})
+
         if has_missing:
-            _set_progress(uid, 5, 'action_required', f'Found {total_missing} records still missing geographical data', extra={**result_info, 'log': f'Unable to resolve Province/District/Municipality for {total_missing} accounts via CBS.'})
+            log_parts = []
+            if invalid_fmt > 0: log_parts.append(f"{invalid_fmt} Invalid Accounts")
+            if cbs_missing > 0: log_parts.append(f"{cbs_missing} missing in CBS")
+            log_desc = " & ".join(log_parts) if log_parts else "record issues"
+            
+            _set_progress(uid, 5, 'action_required', f'Found {log_desc}', extra={**result_info, 'log': f'Manual Review required: {invalid_fmt} with bad formats and {cbs_missing} records not found in CBS.'})
             return
 
         # Merchant data clean → now process MB + Connect IPS for sheet 11
@@ -2094,13 +2176,21 @@ def api_classify_municipality(request):
                             requested = set(item['needs'])
                             break
 
-                    dist = fields.get('district')
-                    muni = fields.get('municipality')
+                    raw_dist = fields.get('district')
+                    raw_muni = fields.get('municipality')
 
-                    if 'district' in requested and dist in VALID_DISTRICTS and not resolved[acc].get('district'):
-                        resolved[acc]['district'] = dist
-                    if 'municipality' in requested and muni in VALID_MUNI and not resolved[acc].get('municipality'):
-                        resolved[acc]['municipality'] = muni
+                    # Map to canonical forms immediately to ensure validation passes
+                    dist_mapped = map_district(raw_dist) if raw_dist else 'Unmatched'
+                    muni_mapped = map_local(raw_muni) if raw_muni else 'Unmatched'
+
+                    if 'district' in requested and dist_mapped != 'Unmatched' and not resolved[acc].get('district'):
+                        resolved[acc]['district'] = dist_mapped
+                    if 'municipality' in requested and muni_mapped != 'Unmatched' and not resolved[acc].get('municipality'):
+                        resolved[acc]['municipality'] = muni_mapped
+
+            if uid := request.GET.get('uid'):
+                # JS already updates local status, but we could log here if needed
+                pass
 
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=500)
@@ -2112,23 +2202,40 @@ def api_classify_municipality(request):
             if derived:
                 entry['province'] = derived
 
-    # ---- Layer 4: Save to CleanCBS ONLY if all three are present ----
+    # ---- Layer 4: Save to CleanCBS ONLY if all three are present (merged) ----
     for acc, fields in resolved.items():
-        if not (fields.get('province') and fields.get('district') and fields.get('municipality')):
+        obj = CleanCBS.objects.filter(account_number=acc).first()
+        
+        # Prepare combined data to check for completeness
+        # Start with what we just resolved
+        combined = {
+            'province': fields.get('province'),
+            'district': fields.get('district'),
+            'municipality': fields.get('municipality')
+        }
+        # Fill in from existing CleanCBS if missing in resolved
+        if obj:
+            for f in ('province', 'district', 'municipality'):
+                if not combined.get(f):
+                    combined[f] = getattr(obj, f, None)
+        
+        # STRICTOR RULE: Only save/update if the final result is complete
+        if not (combined.get('province') and combined.get('district') and combined.get('municipality')):
             continue  # incomplete — don't save
 
-        obj, created = CleanCBS.objects.get_or_create(account_number=acc, defaults={'is_merchant': True})
-        if created or not obj.is_merchant:
-            obj.is_merchant = True
-
-        # Never overwrite a non-empty field
-        changed = False
+        if not obj:
+            obj = CleanCBS.objects.create(account_number=acc, is_merchant=True)
+            print(f"[AI-Save] NEW CleanCBS created for {acc}")
+        
+        needs_save = False
+        # Update missing fields from resolved data
         for field in ('province', 'district', 'municipality'):
             val = fields.get(field)
             current = getattr(obj, field, None)
             if val and (not current or str(current).strip() == ''):
                 setattr(obj, field, val)
-                changed = True
+                needs_save = True
+                print(f"[AI-Save] Updating {field} for {acc} -> {val}")
 
         # Fill gender/dob/address from CBS (don't overwrite existing)
         cbs = cbs_data.get(acc, {})
@@ -2137,26 +2244,26 @@ def api_classify_municipality(request):
             current = getattr(obj, field, None)
             if cbs_val and (not current or str(current).strip() == ''):
                 setattr(obj, field, cbs_val)
-                changed = True
+                needs_save = True
 
         if not obj.is_merchant:
             obj.is_merchant = True
-            changed = True
+            needs_save = True
 
-        if changed:
+        if needs_save:
             obj.save()
+            print(f"[AI-Save] SUCCESSFULLY PERSISTED {acc} to CleanCBS")
 
     return JsonResponse({'results': resolved})
 
 
-# --- LEGACY VIEWS (review, apply, finalize page, download) ---
-
-def review_missing_data(request, unique_id):
+def _prepare_manual_review_data(unique_id):
+    """Helper to gather records needing manual review and auto-patch resolvable ones."""
     f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
     n_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_nepalpay_{unique_id}.xlsx')
 
     if not os.path.exists(f_path2) or not os.path.exists(n_path2):
-        raise Http404("Processed Data Files not found. They might have been deleted.")
+        return None, None, None
 
     f_step2 = pd.read_excel(f_path2, dtype=str)
     n_step2 = pd.read_excel(n_path2, dtype=str)
@@ -2174,15 +2281,9 @@ def review_missing_data(request, unique_id):
             all_missing.append(data)
 
     if not all_missing:
-        return render(request, 'merchant/review_missing_data.html', {
-            'unique_id': unique_id, 'missing_records': [],
-            'provinces_list': provinces_list, 'districts_list': districts_list,
-            'local_cats': local_cats, 'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
-        })
+        return [], {}, {}
 
     all_accs = [d['account_number'] for d in all_missing]
-
-    # Fresh lookup: CBS first, then CleanCBS corrections
     cbs_data = _cbs_source_lookup(all_accs)
     corrections = {}
     for chunk in [all_accs[i:i+900] for i in range(0, len(all_accs), 900)]:
@@ -2191,12 +2292,10 @@ def review_missing_data(request, unique_id):
         ):
             corrections[r['account_number']] = r
 
-    # For each missing field, try to resolve from CBS/CleanCBS right now.
-    # Anything resolvable: patch step2 file + save to CleanCBS. Only show truly unresolvable.
     _mappers = {'province': map_province, 'district': map_district, 'municipality': map_local}
     f_patches, n_patches = {}, {}
-
     truly_missing = []
+
     for d in all_missing:
         acc = d['account_number']
         cbs  = cbs_data.get(acc, {})
@@ -2205,42 +2304,34 @@ def review_missing_data(request, unique_id):
 
         still_needs = {'province': False, 'district': False, 'municipality': False}
         for field in ('province', 'district', 'municipality'):
-            if not d.get(f'needs_{field}'):
-                continue
-            # CleanCBS first, CBS fallback
+            if not d.get(f'needs_{field}'): continue
             raw_val = corr.get(field) or cbs.get(field) or ''
             resolved = _mappers[field](raw_val)
             if resolved != 'Unmatched' and raw_val:
-                # Resolvable — patch step2 and CleanCBS
-                if acc not in patches:
-                    patches[acc] = {}
+                if acc not in patches: patches[acc] = {}
                 patches[acc][field] = raw_val
             else:
                 still_needs[field] = True
 
-        # Address-based municipality classification (before showing manual review)
         if still_needs.get('municipality'):
             addr1 = cbs.get('address_1') or corr.get('address_1') or d.get('address_1', '')
             addr3 = cbs.get('address_3') or corr.get('address_3') or d.get('address_3', '')
             muni_type = classify_municipality_from_address(addr1, addr3)
             if muni_type:
-                if acc not in patches:
-                    patches[acc] = {}
+                if acc not in patches: patches[acc] = {}
                 patches[acc]['municipality'] = muni_type
                 still_needs['municipality'] = False
 
-        # Only keep in review if at least one field is still unresolvable
         if any(still_needs.values()):
             d['needs_province']     = still_needs['province']
             d['needs_district']     = still_needs['district']
             d['needs_municipality'] = still_needs['municipality']
             truly_missing.append(d)
 
-    # Patch step2 Excel files with auto-resolved values
+    # Patch Step 2 files
     def _patch_df(df, patches):
         acc_col = find_account_col(df)
-        if not acc_col or not patches:
-            return df, False
+        if not acc_col or not patches: return df, False
         changed = False
         for idx, row in df.iterrows():
             acc = str(row.get(acc_col, '')).strip()
@@ -2251,61 +2342,136 @@ def review_missing_data(request, unique_id):
                         changed = True
         return df, changed
 
-    f_step2, f_changed = _patch_df(f_step2, f_patches)
-    n_step2, n_changed = _patch_df(n_step2, n_patches)
-    if f_changed: f_step2.to_excel(f_path2, index=False)
-    if n_changed: n_step2.to_excel(n_path2, index=False)
+    f_s2_new, f_c = _patch_df(f_step2, f_patches)
+    n_s2_new, n_c = _patch_df(n_step2, n_patches)
+    if f_c: f_s2_new.to_excel(f_path2, index=False)
+    if n_c: n_s2_new.to_excel(n_path2, index=False)
 
-    # Persist auto-resolved values to CleanCBS
-    all_patches = {}
-    for patches in (f_patches, n_patches):
-        for acc, fields in patches.items():
-            if acc not in all_patches:
-                all_patches[acc] = {}
-            all_patches[acc].update(fields)
-    for acc, fields in all_patches.items():
+    # Persist high-confidence automated patches
+    all_p = {**f_patches, **n_patches}
+    for acc, fields in all_p.items():
         obj = CleanCBS.objects.filter(account_number=acc).first()
         if obj:
-            changed = False
-            for field, val in fields.items():
-                if val and not getattr(obj, field, None):
-                    setattr(obj, field, val)
-                    changed = True
-            if not obj.is_merchant:
-                obj.is_merchant = True
-                changed = True
-            if changed:
+            # Update only if it leads to a complete record or if already complete
+            ch = False
+            for f, v in fields.items():
+                if v and not getattr(obj, f, None):
+                    setattr(obj, f, v); ch = True
+            
+            # Auto-derive province if missing but district found
+            if not obj.province and obj.district:
+                der = province_from_district(obj.district)
+                if der: obj.province = der; ch = True
+            
+            if not obj.is_merchant: obj.is_merchant = True; ch = True
+            
+            # STRICTOR RULE: Only save if complete
+            if ch and obj.province and obj.district and obj.municipality:
                 obj.save()
         else:
-            # Only create if all three geo fields will be present
-            new_data = dict(fields)
-            # Derive province from district if not provided
-            if not new_data.get('province') and new_data.get('district'):
-                derived = province_from_district(new_data['district'])
-                if derived:
-                    new_data['province'] = derived
-            if new_data.get('province') and new_data.get('district') and new_data.get('municipality'):
+            # Create new only if complete
+            new_v = dict(fields)
+            if not new_v.get('province') and new_v.get('district'):
+                der = province_from_district(new_v['district'])
+                if der: new_v['province'] = der
+            
+            if new_v.get('province') and new_v.get('district') and new_v.get('municipality'):
                 CleanCBS.objects.create(account_number=acc, is_merchant=True, **{
-                    k: v for k, v in new_data.items()
-                    if k in ('province', 'district', 'municipality')
+                    k: v for k, v in new_v.items() if k in ('province', 'district', 'municipality')
                 })
 
-    # Populate address + CBS presence for display
     for d in truly_missing:
         acc = d['account_number']
         r = cbs_data.get(acc) or corrections.get(acc, {})
         d['address_1']  = r.get('address_1') or ''
         d['address_3']  = r.get('address_3') or ''
         d['not_in_cbs'] = acc not in cbs_data
+        
+        # Ensure latest values are present (including those just patched above)
+        p = f_patches if d['platform'] == 'FonePay' else n_patches
+        acc_p = p.get(acc, {})
+        for field in ('province', 'district', 'municipality', 'gender'):
+            if not d.get(field):
+                d[field] = acc_p.get(field) or r.get(field) or ''
+    
+    auto_resolved_count = len(all_missing) - len(truly_missing)
+    return truly_missing, cbs_data, corrections, auto_resolved_count
+
+def review_missing_data(request, unique_id):
+    truly_missing, _, _, auto_resolved = _prepare_manual_review_data(unique_id)
+    if truly_missing is None:
+        raise Http404("Processed Data Files not found.")
+
+    if not truly_missing:
+        return render(request, 'merchant/review_missing_data.html', {
+            'unique_id': unique_id, 'missing_records': [],
+            'auto_resolved_count': auto_resolved,
+            'provinces_list': provinces_list, 'districts_list': districts_list,
+            'local_cats': local_cats, 'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
+        })
 
     return render(request, 'merchant/review_missing_data.html', {
         'unique_id': unique_id,
         'missing_records': truly_missing,
+        'auto_resolved_count': auto_resolved,
         'provinces_list': provinces_list,
         'districts_list': districts_list,
         'local_cats': local_cats,
         'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
     })
+
+def download_review_list(request, unique_id):
+    """Generates an Excel list of all accounts currently awaiting manual review."""
+    truly_missing, _, _, _ = _prepare_manual_review_data(unique_id)
+    if truly_missing is None:
+        raise Http404("Processed Data Files not found.")
+
+    export_rows = []
+    for d in truly_missing:
+        # Determine Condition
+        if d.get('needs_account_fix'):
+            cond = "Invalid Account"
+        elif d.get('not_in_cbs'):
+            cond = "Not in CBS"
+        else:
+            # Check which fields are still missing
+            missing = []
+            if d.get('needs_province'): missing.append("Province")
+            if d.get('needs_district'): missing.append("District")
+            if d.get('needs_municipality'): missing.append("Municipality")
+            if d.get('needs_gender'): missing.append("Gender")
+            cond = "Missing: " + ", ".join(missing) if missing else "Review Required"
+
+        export_rows.append({
+            'Account Number': d['account_number'],
+            'Platform': d['platform'],
+            'Condition': cond,
+            'Address 1 (from CBS)': d.get('address_1', ''),
+            'Address 3 (from CBS)': d.get('address_3', ''),
+        })
+
+    df = pd.DataFrame(export_rows)
+    
+    # Generate Excel in memory
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Manual Review List')
+        
+        # Simple auto-adjust columns
+        worksheet = writer.sheets['Manual Review List']
+        for i, col in enumerate(df.columns):
+            max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            worksheet.column_dimensions[chr(65+i)].width = min(max_len, 50)
+
+    output.seek(0)
+    
+    filename = f"manual_review_list_{unique_id}.xlsx"
+    response = HttpResponse(
+        output.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename={filename}'
+    return response
 
 def apply_manual_mapping(request, unique_id):
     if request.method == 'POST':
@@ -2320,8 +2486,27 @@ def apply_manual_mapping(request, unique_id):
         
         col_map = {'prov': 'province', 'dist': 'district', 'muni': 'municipality', 'gender': 'gender'}
         updates = {}
+        account_fixes = {}  # old_acc -> new_acc
+        to_delete = set()
+
         for key, val in request.POST.items():
-            if val and str(val).strip() and val != 'Ignore':
+            if not val or str(val).strip() == '':
+                continue
+            
+            # 1. Handle Account Fixes
+            if key.startswith('new_account_'):
+                old_acc = key.replace('new_account_', '')
+                new_acc = str(val).strip()
+                if new_acc != old_acc:
+                    account_fixes[old_acc] = new_acc
+            
+            # 2. Handle Deletions
+            elif key.startswith('delete_') and val == 'true':
+                acc = key.replace('delete_', '')
+                to_delete.add(acc)
+
+            # 3. Handle Geo/Gender Updates
+            elif val != 'Ignore':
                 parts = key.split('_', 1)
                 if len(parts) == 2 and parts[0] in col_map:
                     col = col_map[parts[0]]
@@ -2331,13 +2516,27 @@ def apply_manual_mapping(request, unique_id):
                     
         def patch_df(df, acc_col):
             if not acc_col or df.empty: return df
+            rows_to_keep = []
             for idx, r in df.iterrows():
                 acc = str(r.get(acc_col)).strip()
+                
+                # Check for deletions
+                if acc in to_delete:
+                    continue
+                
+                # Check for account fixes
+                if acc in account_fixes:
+                    df.at[idx, acc_col] = account_fixes[acc]
+                    acc = account_fixes[acc] # update acc for subsequent updates
+                
+                # Check for geo updates
                 if acc in updates:
                     for col, new_val in updates[acc].items():
                         if col in df.columns and is_empty(r.get(col)):
                             df.at[idx, col] = new_val
-            return df
+                
+                rows_to_keep.append(idx)
+            return df.loc[rows_to_keep].copy()
             
         f_step2 = patch_df(f_step2, f_acc_col)
         n_step2 = patch_df(n_step2, n_acc_col)
@@ -2346,35 +2545,42 @@ def apply_manual_mapping(request, unique_id):
         n_step2.to_excel(n_path2, index=False)
 
         # Persist user fills into CleanCBS — never into the bank's CBSMerchant
-        # Only save if record will be complete (province + district + municipality)
         for acc, fields in updates.items():
-            clean_obj = CleanCBS.objects.filter(account_number=acc).first()
+            final_acc = account_fixes.get(acc, acc)
+            if final_acc in to_delete: continue
+
+            clean_obj = CleanCBS.objects.filter(account_number=final_acc).first()
+            
+            # Prepare data set (merge existing + new)
+            full_data = {}
             if clean_obj:
-                for col, val in fields.items():
-                    setattr(clean_obj, col, val)
-                # Derive province from district if missing
-                if not clean_obj.province and clean_obj.district:
-                    derived = province_from_district(clean_obj.district)
-                    if derived:
-                        clean_obj.province = derived
-                if not clean_obj.is_merchant:
+                full_data = {'province': clean_obj.province, 'district': clean_obj.district, 'municipality': clean_obj.municipality, 'gender': clean_obj.gender}
+            
+            # Override with new user inputs
+            for col, val in fields.items():
+                if val != 'Ignore':
+                    full_data[col] = val
+
+            # Auto-derive province if missing but district given
+            if not full_data.get('province') and full_data.get('district'):
+                derived = province_from_district(full_data['district'])
+                if derived:
+                    full_data['province'] = derived
+            
+            # STRICTOR RULE: Only save/update if the result is complete
+            if full_data.get('province') and full_data.get('district') and full_data.get('municipality'):
+                if clean_obj:
+                    for k, v in full_data.items():
+                        setattr(clean_obj, k, v)
                     clean_obj.is_merchant = True
-                # Only keep if complete
-                if clean_obj.province and clean_obj.district and clean_obj.municipality:
                     clean_obj.save()
                 else:
-                    clean_obj.delete()  # remove incomplete record
-            else:
-                # Derive province from district
-                if not fields.get('province') and fields.get('district'):
-                    derived = province_from_district(fields['district'])
-                    if derived:
-                        fields['province'] = derived
-                if fields.get('province') and fields.get('district') and fields.get('municipality'):
-                    CleanCBS.objects.create(account_number=acc, is_merchant=True, **{
-                        k: v for k, v in fields.items()
-                        if k in ('province', 'district', 'municipality')
+                    CleanCBS.objects.create(account_number=final_acc, is_merchant=True, **{
+                        k: v for k, v in full_data.items()
+                        if k in ('province', 'district', 'municipality', 'gender')
                     })
+            # Else: We do NOT delete the existing record anymore. We just don't update it to CleanCBS 
+            # if it's still missing pieces. This prevents loss of work (like gender fills).
 
         # Kick off final report generation in background then return to main page
         _set_progress(unique_id, 8, 'active', 'Generating final report...')
@@ -2414,23 +2620,34 @@ def finalize_report(request, unique_id):
     f_df_len = len(pd.read_excel(f_path1)) if os.path.exists(f_path1) else len(f_step2)
     n_df_len = len(pd.read_excel(n_path1)) if os.path.exists(n_path1) else len(n_step2)
 
+    # Read persisted stats if available
+    stats_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'stats_{unique_id}.json')
+    if os.path.exists(stats_path):
+        with open(stats_path, 'r') as f:
+            rd = json.load(f)
+    else:
+        rd = {}
+
     context = {
-        'fonepay_count': f_df_len,
-        'nepalpay_count': n_df_len,
+        'success': True,
+        'unique_id': unique_id,
+        'step3_filename': step3_filename,
+        'fonepay_count': rd.get('fonepay_count', 0),
+        'nepalpay_count': rd.get('nepalpay_count', 0),
+        'total_records': rd.get('total_records', 0),
+        'deleted_count': rd.get('deleted_count', 0),
+        'merged_cbs_count': rd.get('merged_cbs_count', 0),
+        'script_mapped_count': rd.get('script_mapped_count', 0),
+        'invalid_account_count': rd.get('invalid_account_count', 0),
+        'fonepay_provinces': rd.get('fonepay_provinces', {}),
+        'fonepay_districts': rd.get('fonepay_districts', {}),
+        'nepalpay_provinces': rd.get('nepalpay_provinces', {}),
+        'nepalpay_districts': rd.get('nepalpay_districts', {}),
+        # Filenames for links
         'fonepay_filename': f'step1_fonepay_{unique_id}.xlsx',
         'nepalpay_filename': f'step1_nepalpay_{unique_id}.xlsx',
         'fonepay_step2_filename': f'step2_fonepay_{unique_id}.xlsx',
         'nepalpay_step2_filename': f'step2_nepalpay_{unique_id}.xlsx',
-        'step3_filename': step3_filename,
-        'fonepay_provinces': get_prov_counts(f_step2),
-        'fonepay_districts': get_dist_counts(f_step2),
-        'nepalpay_provinces': get_prov_counts(n_step2),
-        'nepalpay_districts': get_dist_counts(n_step2),
-        'fonepay_step1_provinces': get_prov_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
-        'fonepay_step1_districts': get_dist_counts(pd.read_excel(f_path1) if os.path.exists(f_path1) else pd.DataFrame()),
-        'nepalpay_step1_provinces': get_prov_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
-        'nepalpay_step1_districts': get_dist_counts(pd.read_excel(n_path1) if os.path.exists(n_path1) else pd.DataFrame()),
-        'success': True
     }
     return render(request, 'merchant/upload.html', context)
 

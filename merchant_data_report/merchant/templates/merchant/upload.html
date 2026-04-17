@@ -396,6 +396,32 @@
             </div>
             {% endif %}
 
+            <!-- Processing Summary -->
+            <div class="res-section">
+                <h2>Processing Summary</h2>
+                <div class="res-grid" style="grid-template-columns: repeat(4, 1fr);">
+                    <div class="data-box" style="border-left: 3px solid var(--blue);">
+                        <h5 style="margin-bottom: 4px; color: var(--text-dim);">Total Processed</h5>
+                        <div class="data-count" style="font-size: 1.5rem;">{{ total_records|default:0 }}</div>
+                    </div>
+                    <div class="data-box" style="border-left: 3px solid var(--success);">
+                        <h5 style="margin-bottom: 4px; color: var(--text-dim);">Merged from CBS</h5>
+                        <div class="data-count" style="font-size: 1.5rem;">{{ merged_cbs_count|default:0 }}</div>
+                    </div>
+                    <div class="data-box" style="border-left: 3px solid #7c3aed;">
+                        <h5 style="margin-bottom: 4px; color: var(--text-dim);">Mapped via AI/Scripts</h5>
+                        <div class="data-count" style="font-size: 1.5rem;">{{ script_mapped_count|default:0 }}</div>
+                    </div>
+                    <div class="data-box" style="border-left: 3px solid var(--orange);">
+                        <h5 style="margin-bottom: 4px; color: var(--text-dim);">Excluded Records</h5>
+                        <div class="data-count" style="font-size: 1.5rem;">{{ deleted_count|default:0 }}</div>
+                        <p style="font-size: 0.75rem; color: var(--text-dim); margin-top: 4px;">
+                            Incl. <strong>{{ invalid_account_count|default:0 }}</strong> invalid formats
+                        </p>
+                    </div>
+                </div>
+            </div>
+
             <!-- Final Report -->
             {% if step3_filename %}
             <div class="res-section">

@@ -194,6 +194,32 @@
             transition: width 0.3s ease;
         }
 
+        .btn-remove {
+            background: none;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-remove:hover {
+            background: #fef2f2;
+        }
+        .btn-remove svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .editable-acc {
+            border: 1px solid #f97316 !important;
+            background: #fff7ed !important;
+            font-weight: 600;
+        }
+
     </style>
 </head>
 <body>
@@ -206,8 +232,21 @@
                 <button type="button" class="btn-ai" id="btnAIClassify" onclick="aiClassifyGeo()">
                     ✦ AI Classify Province / District / Municipality
                 </button>
+                <a href="{% url 'download_review_list' unique_id %}" class="btn-ai" style="text-decoration: none; display: inline-flex; align-items: center; background: #6366f1; border: none; cursor: pointer; color: white; padding: 0.6rem 1.2rem; border-radius: 8px; font-weight: 600; font-size: 0.9rem; transition: all 0.2s ease;">
+                    <svg style="width: 18px; height: 18px; margin-right: 8px;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                    Download Review List (Excel)
+                </a>
                 <span class="ai-status" id="aiStatus"></span>
             </div>
+            
+            {% if auto_resolved_count %}
+            <div style="margin-top: 1rem; padding: 0.8rem 1.2rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; color: #166534; font-size: 0.875rem; display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+                <div style="background: #dcfce7; border-radius: 50%; padding: 4px; display: flex;">
+                    <svg style="width: 16px; height: 16px; color: #15803d;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                </div>
+                <span><strong>{{ auto_resolved_count }}</strong> accounts were automatically resolved via CBS/Pattern matching and moved directly to the final report.</span>
+            </div>
+            {% endif %}
             <div class="ai-progress-wrap" id="aiProgressWrap">
                 <div class="ai-progress-bar" id="aiProgressBar"></div>
             </div>
@@ -231,11 +270,22 @@
                     </thead>
                     <tbody>
                         {% for row in missing_records %}
-                        <tr>
+                        <tr id="row-{{ row.account_number }}">
                             <td>
-                                <strong>{{ row.account_number }}</strong><br>
+                                {% if row.needs_account_fix %}
+                                <div style="display: flex; flex-direction: column; gap: 4px;">
+                                    <input type="text" name="new_account_{{ row.account_number }}" 
+                                           value="{{ row.account_number }}" 
+                                           class="editable-acc"
+                                           placeholder="Fix account number">
+                                    <span style="font-size: 0.7rem; color: #f97316; font-weight: 600;">⚠ Invalid Account</span>
+                                </div>
+                                {% else %}
+                                <strong>{{ row.account_number }}</strong>
+                                {% endif %}
+                                <br>
                                 <span style="font-size: 0.75rem; color: #0284c7; font-weight: 500;">{{ row.platform }}</span>
-                                {% if row.not_in_cbs %}
+                                {% if row.not_in_cbs and not row.needs_account_fix %}
                                 <br><span style="font-size: 0.7rem; color: #f97316; font-weight: 600;">⚠ Not in CBS</span>
                                 {% endif %}
                             </td>
@@ -256,7 +306,8 @@
                                     {% endfor %}
                                 </select>
                                 {% else %}
-                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing ({{ row.province }})</span>
+                                <input type="hidden" name="prov_{{ row.account_number }}" value="{{ row.province }}">
                                 {% endif %}
                             </td>
                             
@@ -274,7 +325,8 @@
                                     {% endfor %}
                                 </select>
                                 {% else %}
-                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing ({{ row.district }})</span>
+                                <input type="hidden" name="dist_{{ row.account_number }}" value="{{ row.district }}">
                                 {% endif %}
                             </td>
                             
@@ -292,7 +344,8 @@
                                     {% endfor %}
                                 </select>
                                 {% else %}
-                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing ({{ row.municipality }})</span>
+                                <input type="hidden" name="muni_{{ row.account_number }}" value="{{ row.municipality }}">
                                 {% endif %}
                             </td>
 
@@ -306,9 +359,11 @@
                                     {% endfor %}
                                 </select>
                                 {% else %}
-                                <span style="color: #10b981; font-weight: 500;">✓ Existing</span>
+                                <span style="color: #10b981; font-weight: 500;">✓ Existing ({{ row.gender }})</span>
+                                <input type="hidden" name="gender_{{ row.account_number }}" value="{{ row.gender }}">
                                 {% endif %}
                             </td>
+
                         </tr>
                         {% empty %}
                         <tr>
@@ -440,6 +495,19 @@ async function aiClassifyGeo() {
         btn.disabled = false;
         btn.textContent = '✦ AI Classify Province / District / Municipality';
         progressWrap.style.display = 'none';
+    }
+}
+
+function removeRow(acc) {
+    if (confirm('Are you sure you want to remove this record from the report?')) {
+        const row = document.getElementById('row-' + acc);
+        const delInput = document.getElementById('delete-' + acc);
+        if (row && delInput) {
+            row.style.opacity = '0.4';
+            row.style.pointerEvents = 'none';
+            row.style.textDecoration = 'line-through';
+            delInput.value = 'true';
+        }
     }
 }
 
