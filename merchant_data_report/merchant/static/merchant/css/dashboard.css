@@ -1,0 +1,814 @@
+/* ============================================================
+   NRB Report System — Main Stylesheet
+   Jyoti Bikas Bank Limited
+   ============================================================ */
+
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bank-blue:      #1a3a6b;
+  --bank-blue-mid:  #1e4d94;
+  --bank-blue-lt:   #2563c0;
+  --bank-gold:      #e8b94a;
+  --bank-gold-dk:   #c9980a;
+  --success:        #16a34a;
+  --success-bg:     #dcfce7;
+  --error:          #dc2626;
+  --error-bg:       #fee2e2;
+  --warning:        #d97706;
+  --warning-bg:     #fef3c7;
+  --text-main:      #1e293b;
+  --text-muted:     #64748b;
+  --text-light:     #94a3b8;
+  --border:         #e2e8f0;
+  --bg-page:        #f0f4f8;
+  --bg-panel:       #ffffff;
+  --bg-panel-alt:   #f8fafc;
+  --radius:         10px;
+  --shadow:         0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+  --shadow-lg:      0 8px 32px rgba(26,58,107,.15);
+}
+
+html { font-size: 14px; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; color: var(--text-main); line-height: 1.5; }
+a { text-decoration: none; }
+
+/* ── LOGIN PAGE ──────────────────────────────────────────── */
+.login-body {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #0f2347 0%, #1a3a6b 50%, #0f2347 100%);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+
+.login-wrapper {
+  width: 100%; max-width: 440px;
+  display: flex; flex-direction: column; gap: 0;
+}
+
+.login-brand {
+  text-align: center;
+  padding: 0 0 28px;
+}
+.brand-logo {
+  display: flex; align-items: center; gap: 16px; justify-content: center;
+}
+.logo-icon svg { width: 64px; height: 64px; }
+.logo-icon img {
+  width: 72px; height: 72px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #fff;
+  padding: 4px;
+  display: block;
+}
+.brand-text h1 {
+  font-size: 1.4rem; font-weight: 700; color: #fff; text-align: left;
+}
+.brand-text span {
+  font-size: .78rem; color: var(--bank-gold); letter-spacing: .04em;
+  text-transform: uppercase; display: block; text-align: left;
+}
+
+.login-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 36px 40px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+}
+
+.login-card-header { text-align: center; margin-bottom: 28px; }
+.login-card-header h2 { font-size: 1.4rem; font-weight: 700; color: var(--bank-blue); }
+.login-card-header p  { color: var(--text-muted); font-size: .85rem; margin-top: 4px; }
+
+.alert { display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  border-radius: 8px; font-size: .85rem; margin-bottom: 20px; }
+.alert svg { width: 18px; height: 18px; flex-shrink: 0; }
+.alert-error { background: var(--error-bg); color: var(--error); border: 1px solid #fca5a5; }
+
+.login-form { display: flex; flex-direction: column; gap: 20px; }
+
+.form-group label {
+  display: block; font-size: .82rem; font-weight: 600;
+  color: var(--text-main); margin-bottom: 6px;
+}
+.input-wrapper { position: relative; gap: 20px}
+.input-icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  width: 18px; height: 18px; color: var(--text-light);
+}
+#username {
+  /* position:absolute !important; */
+  /* left: 30px; */
+  padding-left: 40px;
+}
+.input-wrapper input {
+  width: 100%; padding: 11px 14px 11px 40px;
+  border: 1.5px solid var(--border); border-radius: 8px;
+  font-size: .9rem; color: var(--text-main);
+  transition: border-color .2s, box-shadow .2s;
+  outline: none;
+}
+.input-wrapper input:focus {
+  border-color: var(--bank-blue-lt);
+  box-shadow: 0 0 0 3px rgba(37,99,192,.12);
+}
+
+.btn-login {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 13px; width: 100%;
+  background: linear-gradient(135deg, var(--bank-blue) 0%, var(--bank-blue-lt) 100%);
+  color: #fff; border: none; border-radius: 8px;
+  font-size: .95rem; font-weight: 600; cursor: pointer;
+  transition: opacity .2s, transform .15s;
+  margin-top: 4px;
+}
+.btn-login svg { width: 18px; height: 18px; }
+.btn-login:hover { opacity: .92; transform: translateY(-1px); }
+.btn-login:active { transform: translateY(0); }
+
+.login-footer {
+  text-align: center; padding: 20px 0 0;
+  color: rgba(255,255,255,.45); font-size: .75rem; line-height: 1.8;
+}
+
+/* ── DASHBOARD LAYOUT ────────────────────────────────────── */
+.dash-body { background: var(--bg-page); min-height: 100vh; }
+
+.topnav {
+  background: var(--bank-blue);
+  padding: 0 28px;
+  height: 60px;
+  display: flex; align-items: center; justify-content: space-between;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  position: sticky; top: 0; z-index: 100;
+}
+.nav-logo {
+  width: 100px;
+  height: 100px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.nav-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.topnav-left, .topnav-right { display: flex; align-items: center; gap: 16px; }
+.nav-brand { display: flex; align-items: center; gap: 12px; }
+
+.nav-title { color: #fff; font-weight: 700; font-size: .95rem; }
+.nav-subtitle { color: var(--bank-gold); font-size: .7rem; letter-spacing: .03em; text-transform: uppercase; }
+
+.user-pill { display: flex; align-items: center; gap: 10px; }
+.user-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: var(--bank-gold); color: var(--bank-blue);
+  font-weight: 700; font-size: .9rem;
+  display: flex; align-items: center; justify-content: center;
+}
+.user-name  { color: #fff; font-weight: 600; font-size: .85rem; display: block; }
+.user-role  { color: rgba(255,255,255,.55); font-size: .7rem; display: block; }
+
+.btn-logout {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 6px;
+  background: rgba(255,255,255,.12); color: rgba(255,255,255,.85);
+  font-size: .8rem; font-weight: 500; border: 1px solid rgba(255,255,255,.2);
+  transition: background .2s;
+}
+.btn-logout svg { width: 15px; height: 15px; }
+.btn-logout:hover { background: rgba(255,255,255,.2); }
+
+/* ── FLASH MESSAGES ─────────────────────────────────────── */
+.messages-bar { padding: 0 28px 0; }
+.flash {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 16px; border-radius: 8px; margin: 10px 0 0;
+  font-size: .85rem; position: relative;
+}
+.flash svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; }
+.flash-error   { background: var(--error-bg);   color: var(--error);   border: 1px solid #fca5a5; }
+.flash-success { background: var(--success-bg); color: var(--success); border: 1px solid #86efac; }
+.flash-close {
+  margin-left: auto; background: none; border: none;
+  cursor: pointer; color: inherit; font-size: 1.1rem; line-height: 1; padding: 0 2px;
+}
+
+/* ── MAIN GRID ──────────────────────────────────────────── */
+.dash-main {
+  display: grid;
+  grid-template-columns: 320px 1fr 10px 300px;
+  gap: 0 0;
+  column-gap: 0;
+  padding: 20px 28px;
+  min-height: calc(100vh - 60px);
+  align-items: stretch;
+}
+/* Each panel gets its own gap via margin */
+.panel-generate { margin-right: 20px; }
+.panel-shared   { margin-right: 0; }
+.panel-my-logs  { margin-left: 8px; }  /* reduced gap between Passed Reports and My Activity */
+
+/* ── GENERATE PANEL — fixed height, scrollable ──────────── */
+.panel-generate {
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+}
+
+/* ── PANEL BASE ─────────────────────────────────────────── */
+.panel {
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px 22px 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.panel-header {
+  display: flex; align-items: center; gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--bank-blue);
+}
+.panel-header svg { width: 20px; height: 20px; color: var(--bank-blue); flex-shrink: 0; }
+.panel-header h2 { font-size: 1rem; font-weight: 700; color: var(--bank-blue); }
+
+.count-badge {
+  margin-left: auto; background: var(--bank-blue);
+  color: #fff; border-radius: 12px; padding: 2px 10px; font-size: .75rem; font-weight: 700;
+}
+.panel-desc { font-size: .78rem; color: var(--text-muted); margin-top: -6px; }
+
+/* ── GENERATE FORM ──────────────────────────────────────── */
+.panel-subheader .inst-badge {
+  display: inline-block;
+  background: #eff6ff; color: var(--bank-blue-lt);
+  border: 1px solid #bfdbfe; border-radius: 20px;
+  padding: 4px 14px; font-size: .78rem; font-weight: 600;
+}
+
+.form-section-title {
+  font-size: .72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-muted);
+  padding: 8px 0 2px;
+}
+
+.period-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.form-group { display: flex; flex-direction: column; gap: 5px; }
+.form-group label {
+  font-size: .8rem; font-weight: 600; color: var(--text-main);
+  display: flex; align-items: center; gap: 4px;
+}
+.required-star { color: var(--error); }
+.file-label-icon { font-size: 1em; }
+
+.form-group select,
+.form-group input[type="text"] {
+  padding: 8px 12px; border: 1.5px solid var(--border);
+  border-radius: 7px; font-size: .85rem; outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.form-group select:focus,
+.form-group input[type="text"]:focus {
+  border-color: var(--bank-blue-lt);
+  box-shadow: 0 0 0 3px rgba(37,99,192,.1);
+}
+
+/* File inputs */
+.file-group { gap: 6px; }
+.file-input-wrapper { position: relative; }
+.file-input-wrapper input[type="file"] { display: none; }
+.file-input-label {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px; border: 1.5px dashed #cbd5e1;
+  border-radius: 7px; cursor: pointer; font-size: .82rem;
+  color: var(--text-muted); background: var(--bg-panel-alt);
+  transition: border-color .2s, background .2s;
+}
+.file-input-label:hover { border-color: var(--bank-blue-lt); background: #eff6ff; color: var(--bank-blue); }
+.file-input-label svg { width: 16px; height: 16px; flex-shrink: 0; }
+.file-input-label.has-file {
+  border-color: var(--success); background: var(--success-bg); color: var(--success);
+  border-style: solid;
+}
+.file-hint { font-size: .7rem; color: var(--text-light); line-height: 1.4; }
+
+.btn-generate {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px; width: 100%;
+  background: linear-gradient(135deg, var(--bank-blue) 0%, var(--bank-blue-lt) 100%);
+  color: #fff; border: none; border-radius: 8px;
+  font-size: .9rem; font-weight: 600; cursor: pointer;
+  transition: opacity .2s, transform .15s;
+  margin-top: 6px;
+}
+.btn-generate svg { width: 18px; height: 18px; }
+.btn-generate:hover { opacity: .9; transform: translateY(-1px); }
+.btn-generate:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+/* ── REPORT TABLE ───────────────────────────────────────── */
+.report-table-wrapper { overflow-x: auto; }
+.report-table {
+  width: 100%; border-collapse: collapse;
+  font-size: .78rem;
+}
+.report-table th {
+  background: var(--bank-blue); color: #fff;
+  padding: 9px 10px; text-align: left;
+  font-weight: 600; white-space: nowrap;
+}
+.report-table td {
+  padding: 9px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.report-table tbody tr:hover { background: #f8faff; }
+.report-table .num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+.report-table .date-cell { white-space: nowrap; font-size: .73rem; }
+.report-table .inst-cell { font-size: .73rem; color: var(--text-muted); }
+.by-user { font-size: .68rem; color: var(--text-light); margin-top: 2px; }
+.dl-cell { white-space: nowrap; }
+
+.status-badge {
+  display: inline-block; border-radius: 20px; padding: 3px 10px;
+  font-size: .72rem; font-weight: 600;
+}
+.status-completed { background: var(--success-bg); color: var(--success); }
+.status-error     { background: var(--error-bg);   color: var(--error); }
+.status-pending, .status-processing { background: var(--warning-bg); color: var(--warning); }
+
+/* Download buttons */
+.btn-dl {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; border-radius: 5px;
+  font-size: .75rem; font-weight: 600; border: none; cursor: pointer;
+  transition: opacity .15s, transform .1s;
+}
+.btn-dl:hover { opacity: .85; transform: translateY(-1px); }
+.btn-bfi { background: #1a3a6b; color: #fff; margin-right: 4px; }
+.btn-sis { background: #e8b94a; color: #1a3a6b; }
+.btn-sm  { padding: 4px 9px; font-size: .72rem; }
+
+/* ── MY LOGS CARDS ──────────────────────────────────────── */
+.panel-my-logs {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
+  overflow: hidden;
+}
+
+/* ── PASSED REPORTS — fixed height, scrollable body, pinned pagination ── */
+.panel-shared {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
+  overflow: hidden;
+}
+.shared-scroll-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  min-height: 0;   /* crucial for flex scroll to work */
+}
+.shared-pagination-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  margin-top: 0;
+  background: var(--bg-panel);
+}
+/* Remove the inner border-top from pagination since footer already has one */
+.shared-pagination-footer .pagination {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 6px;
+}
+.my-logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.log-card {
+  border-radius: 8px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border);
+  background: #fff;
+  display: flex; flex-direction: column; gap: 8px;
+  transition: border-color .2s;
+}
+.log-card:hover { border-color: var(--bank-blue); }
+.log-ok     { border-left: 4px solid var(--success); }
+.log-error  { border-left: 4px solid var(--error); }
+.log-pending{ border-left: 4px solid var(--warning); }
+
+.log-card-top { display: flex; align-items: center; justify-content: space-between; }
+.log-period { font-weight: 700; font-size: .9rem; color: var(--bank-blue); }
+
+.status-dot {
+  width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+}
+.status-dot-completed  { background: var(--success); }
+.status-dot-error      { background: var(--error); }
+.status-dot-pending,
+.status-dot-processing { background: var(--warning); }
+
+.log-meta-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;
+}
+.log-meta-item { display: flex; flex-direction: column; gap: 1px; }
+.meta-label { font-size: .68rem; color: var(--text-light); text-transform: uppercase; letter-spacing: .04em; }
+.meta-val   { font-size: .8rem; font-weight: 600; color: var(--text-main); }
+.status-txt-completed  { color: var(--success) !important; }
+.status-txt-error      { color: var(--error) !important; }
+.status-txt-pending,
+.status-txt-processing { color: var(--warning) !important; }
+
+.log-files { display: flex; flex-wrap: wrap; gap: 5px; }
+.file-chip {
+  display: inline-block; background: var(--bg-panel-alt); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 8px; font-size: .68rem; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;
+}
+
+.log-error-msg {
+  display: flex; gap: 8px; align-items: flex-start;
+  background: var(--error-bg); border: 1px solid #fca5a5;
+  border-radius: 6px; padding: 8px 10px;
+  font-size: .72rem; color: var(--error); line-height: 1.4;
+}
+.log-error-msg svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 2px; }
+
+.log-card-actions {
+  display: flex; align-items: center; gap: 6px;
+  padding-top: 6px; border-top: 1px solid var(--border);
+}
+
+.btn-del {
+  margin-left: auto; background: none; border: 1.5px solid #fca5a5;
+  border-radius: 5px; padding: 4px 8px; cursor: pointer;
+  font-size: .8rem; transition: background .15s;
+}
+.btn-del:hover { background: var(--error-bg); }
+
+/* ── EMPTY STATE ────────────────────────────────────────── */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 12px; padding: 40px 20px; color: var(--text-muted);
+  text-align: center;
+}
+.empty-state svg { width: 48px; height: 48px; opacity: .3; }
+.empty-state p { font-size: .85rem; }
+
+/* ── PAGINATION ─────────────────────────────────────────── */
+.pagination {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; padding: 10px 0 2px; border-top: 1px solid var(--border); margin-top: 0;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+}
+.pg-btn {
+  padding: 5px 12px; border-radius: 6px; font-size: .78rem; font-weight: 600;
+  background: var(--bank-blue); color: #fff; border: none; cursor: pointer;
+  text-decoration: none; transition: opacity .15s;
+}
+.pg-btn:hover { opacity: .85; }
+.pg-disabled { background: var(--border); color: var(--text-light); cursor: default; }
+.pg-info { font-size: .75rem; color: var(--text-muted); }
+
+/* ── VERIFY CHECKBOX ────────────────────────────────────── */
+.verify-label {
+  display: inline-flex; align-items: center; gap: 5px;
+  cursor: pointer; font-size: .75rem; font-weight: 600;
+  color: var(--text-muted); padding: 4px 10px;
+  border: 1.5px solid var(--border); border-radius: 20px;
+  transition: all .2s; user-select: none;
+  margin-left: auto;
+}
+.verify-label input[type="checkbox"] { display: none; }
+.verify-label:hover { border-color: var(--success); color: var(--success); }
+.verify-label.verified {
+  background: var(--success-bg); color: var(--success);
+  border-color: var(--success);
+}
+.verify-check-icon { font-size: .9rem; }
+
+/* ── DATA DOWNLOAD BUTTON ───────────────────────────────── */
+.btn-data {
+  background: #f1f5f9; color: var(--text-muted);
+  border: 1px solid var(--border);
+  margin-right: 3px;
+}
+.btn-data:hover { background: #e2e8f0; color: var(--text-main); }
+
+/* Clickable file chips in My Activity */
+.file-chip-dl {
+  color: var(--bank-blue-lt) !important;
+  text-decoration: none;
+  cursor: pointer;
+}
+.file-chip-dl:hover {
+  background: #eff6ff !important;
+  border-color: var(--bank-blue-lt) !important;
+}
+
+/* ── RESPONSIVE ─────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .dash-main {
+    grid-template-columns: 300px 1fr;
+    grid-template-rows: auto auto;
+  }
+  .panel-my-logs {
+    grid-column: 1 / -1;
+    max-height: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .dash-main {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+  .topnav { padding: 0 14px; }
+  .user-info { display: none; }
+}
+
+/* ============================================================
+   UPGRADE ADDITIONS — v2
+   1. Toast notifications
+   2. File input error state
+   3. Sidebar toggle / collapse
+   4. Generate button spinner
+   5. Pagination always shown (pagination block always rendered)
+   ============================================================ */
+
+/* ── 1. TOAST NOTIFICATIONS ──────────────────────────────── */
+#toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+  width: calc(100vw - 48px);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 14px 16px;
+  border-radius: 10px;
+  font-size: .84rem;
+  line-height: 1.45;
+  box-shadow: 0 4px 24px rgba(0,0,0,.18), 0 1px 4px rgba(0,0,0,.1);
+  pointer-events: all;
+  position: relative;
+  overflow: hidden;
+  /* Start hidden — slide up on enter */
+  opacity: 0;
+  transform: translateY(20px) scale(.97);
+  transition: opacity .28s ease, transform .28s ease;
+}
+.toast.toast-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.toast.toast-hiding {
+  opacity: 0;
+  transform: translateY(12px) scale(.96);
+  transition: opacity .35s ease, transform .35s ease;
+}
+
+.toast-success { background: #f0fdf4; color: #15803d; border: 1px solid #86efac; }
+.toast-error   { background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; }
+.toast-warning { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+.toast-info    { background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }
+
+.toast-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.toast-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.toast-msg {
+  flex: 1;
+  word-break: break-word;
+}
+
+.toast-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.15rem;
+  line-height: 1;
+  color: inherit;
+  opacity: .55;
+  padding: 0 2px;
+  margin-top: -1px;
+  transition: opacity .15s;
+}
+.toast-close:hover { opacity: 1; }
+
+/* Progress bar — shrinks over the toast's lifetime */
+.toast-progress {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 3px;
+  background: rgba(0,0,0,.07);
+  border-radius: 0 0 10px 10px;
+}
+.toast-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: .4;
+  width: 100%;
+  animation: toast-shrink linear forwards;
+}
+@keyframes toast-shrink {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
+
+/* ── 2. FILE INPUT ERROR STATE ────────────────────────────── */
+.file-input-label.has-error {
+  border-color: var(--error);
+  background: var(--error-bg);
+  color: var(--error);
+  border-style: solid;
+}
+.file-error-msg {
+  display: none;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: .72rem;
+  color: var(--error);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+.file-error-msg svg {
+  width: 13px; height: 13px;
+  flex-shrink: 0; margin-top: 1px;
+}
+
+/* ── 3. PANEL DIVIDER — slim toggle between Passed Reports & My Activity ── */
+.panel-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  cursor: pointer;
+  position: relative;
+  z-index: 10;
+  /* subtle line down the middle */
+  background: linear-gradient(to right, transparent 6px, var(--border) 6px, var(--border) 8px, transparent 8px);
+  transition: background .2s;
+  border-radius: 0;
+  flex-shrink: 0;
+}
+.panel-divider:hover {
+  background: linear-gradient(to right, transparent 5px, #bfdbfe 5px, #bfdbfe 9px, transparent 9px);
+}
+.panel-divider-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: #fff;
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  font-size: .75rem;
+  color: var(--bank-blue);
+  box-shadow: 0 1px 4px rgba(0,0,0,.1);
+  transition: background .18s, transform .3s ease, border-color .18s;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+.panel-divider:hover .panel-divider-icon {
+  background: var(--bank-blue);
+  color: #fff;
+  border-color: var(--bank-blue);
+}
+/* Rotate arrow when sidebar is hidden */
+.panel-divider.sidebar-is-hidden .panel-divider-icon {
+  transform: rotate(180deg);
+}
+
+/* Collapsed state — sidebar shrinks to zero */
+.panel-my-logs.sidebar-collapsed {
+  overflow: hidden;
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  pointer-events: none;
+}
+.panel-my-logs {
+  transition: width .35s ease, opacity .3s ease, padding .35s ease, margin .35s ease;
+}
+
+/* When sidebar hidden: collapse last two columns (divider + panel) */
+.dash-main.sidebar-hidden {
+  grid-template-columns: 320px 1fr 10px 0;
+}
+.dash-main {
+  transition: grid-template-columns .35s ease;
+}
+
+/* ── 4. GENERATE BUTTON SPINNER ───────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid rgba(255,255,255,.35);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  flex-shrink: 0;
+}
+
+.btn-generate.btn-generating {
+  opacity: .75;
+  cursor: not-allowed;
+}
+.btn-generate.btn-generating:hover {
+  transform: none;
+  opacity: .75;
+}
+
+/* ── 5. PAGINATION — always visible (remove has_other_pages gate in CSS)
+        The template already always includes pagination; ensure it looks
+        good even with only 1 page by hiding prev/next gracefully         */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+/* Ensure pagination is always rendered regardless of page count */
+.my-logs-list + .pagination,
+.report-table-wrapper + .pagination {
+  display: flex !important;
+}
+
+/* ── RESPONSIVE ─ divider hidden on small screens ────────────── */
+@media (max-width: 1100px) {
+  .panel-divider { display: none; }
+  .dash-main,
+  .dash-main.sidebar-hidden {
+    grid-template-columns: 300px 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 20px;
+  }
+  .panel-generate { margin-right: 0; }
+  .panel-my-logs  { margin-left: 0; }
+  .panel-my-logs.sidebar-collapsed {
+    width: auto; opacity: 1;
+    padding: 22px 22px 18px;
+    pointer-events: all;
+    grid-column: 1 / -1;
+    max-height: none;
+  }
+  .panel-shared { max-height: none; }
+}
+@media (max-width: 720px) {
+  .dash-main, .dash-main.sidebar-hidden {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+  .panel-generate { margin-right: 0; }
+  .panel-my-logs  { margin-left: 0; }
+}
+
+/* Pagination total count label */
+.pg-total {
+  font-size: .7rem;
+  color: var(--text-light);
+  margin-left: 3px;
+}

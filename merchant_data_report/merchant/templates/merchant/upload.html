@@ -309,19 +309,19 @@
                 <input type="file" name="file" id="fileInput" accept=".xlsx,.xls" required>
             </div>
             <div class="file-group">
-                <label>Card Data (02)</label>
+                <label>Card Data</label>
                 <input type="file" name="card_data" id="cardDataInput" accept=".xlsx,.xls" required>
             </div>
             <div class="file-group">
-                <label>PhonePay Payment Details</label>
+                <label>FonePay Payment Details</label>
                 <input type="file" name="phonepay_details" id="phonepayDetailsInput" accept=".xlsx,.xls" required>
             </div>
             <div class="file-group">
-                <label>Nepal Pay Payment Details</label>
+                <label>NepalPay Payment Details</label>
                 <input type="file" name="nepalpay_details" id="nepalpayDetailsInput" accept=".xlsx,.xls" required>
             </div>
             <div class="file-group">
-                <label>Report 50 (Cardless Report)</label>
+                <label>Cardless Report</label>
                 <input type="file" name="cardless_report" id="cardlessReportInput" accept=".xlsx,.xls" required>
             </div>
             <div class="file-group">
@@ -448,7 +448,7 @@
                 <div class="res-grid">
                     <div class="res-card">
                         <div class="info">
-                            <h4>Fonepay Data</h4><p>{{ fonepay_count }} valid records</p>
+                            <h4>FonePay Data</h4><p>{{ fonepay_count }} valid records</p>
                         </div>
                         <a href="{% url 'download_sheet' fonepay_filename %}" class="btn-dl">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
@@ -456,7 +456,7 @@
                     </div>
                     <div class="res-card">
                         <div class="info">
-                            <h4>Nepal Pay Data</h4><p>{{ nepalpay_count }} valid records</p>
+                            <h4>NepalPay Data</h4><p>{{ nepalpay_count }} valid records</p>
                         </div>
                         <a href="{% url 'download_sheet' nepalpay_filename %}" class="btn-dl">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
@@ -471,7 +471,7 @@
                 <div class="res-grid">
                     <div class="res-card">
                         <div class="info">
-                            <h4>Fonepay Enriched</h4><p>Address, Gender, Age attached</p>
+                            <h4>FonePay Enriched</h4><p>Address, Gender, Age attached</p>
                         </div>
                         <a href="{% url 'download_sheet' fonepay_step2_filename %}" class="btn-dl">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
@@ -479,7 +479,7 @@
                     </div>
                     <div class="res-card">
                         <div class="info">
-                            <h4>Nepal Pay Enriched</h4><p>Address, Gender, Age attached</p>
+                            <h4>NepalPay Enriched</h4><p>Address, Gender, Age attached</p>
                         </div>
                         <a href="{% url 'download_sheet' nepalpay_step2_filename %}" class="btn-dl">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg> Download
@@ -491,21 +491,21 @@
                 <h3 style="font-size: 0.95rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--text-main);">Geographical Breakdown</h3>
                 <div class="res-grid" style="grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0;">
                     <div class="data-box">
-                        <h5 style="color: var(--blue);">Fonepay Provinces</h5>
+                        <h5 style="color: var(--blue);">FonePay Provinces</h5>
                         {% for prov, count in fonepay_provinces.items %}<div class="data-row"><span>{{ prov }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
                     </div>
                     <div class="data-box">
-                        <h5 style="color: var(--blue);">Fonepay Districts</h5>
+                        <h5 style="color: var(--blue);">FonePay Districts</h5>
                         <div class="scroll-area">
                             {% for dist, count in fonepay_districts.items %}<div class="data-row"><span>{{ dist }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
                         </div>
                     </div>
                     <div class="data-box">
-                        <h5 style="color: var(--orange);">Nepal Pay Provinces</h5>
+                        <h5 style="color: var(--orange);">NepalPay Provinces</h5>
                         {% for prov, count in nepalpay_provinces.items %}<div class="data-row"><span>{{ prov }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
                     </div>
                     <div class="data-box">
-                        <h5 style="color: var(--orange);">Nepal Pay Districts</h5>
+                        <h5 style="color: var(--orange);">NepalPay Districts</h5>
                         <div class="scroll-area">
                             {% for dist, count in nepalpay_districts.items %}<div class="data-row"><span>{{ dist }}</span><span class="data-count">{{ count }}</span></div>{% endfor %}
                         </div>
@@ -531,7 +531,7 @@
 
     const stepLabels = [
         "Reading Excel workbook to understand structure",
-        "Filtering required columns for Fonepay & Nepal Pay",
+        "Filtering required columns for FonePay & NepalPay",
         "Querying Core Banking System for account details",
         "Enriching merchant records with CBS data",
         "Validating merchant geographical data completeness",

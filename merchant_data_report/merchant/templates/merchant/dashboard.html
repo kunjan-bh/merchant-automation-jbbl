@@ -1,0 +1,695 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NRB Merchant Dashboard — Jyoti Bikas Bank</title>
+  <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+  <style>
+    /* Minor local tweaks: Generate panel becomes a call-to-action card */
+    .generate-cta {
+      display: flex; flex-direction: column; gap: 12px;
+      padding: 18px; border-radius: 10px;
+      background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+      border: 1px solid #dbeafe;
+    }
+    .generate-cta p { font-size: .8rem; color: var(--text-muted); line-height: 1.5; }
+    .generate-cta ul {
+      list-style: none; padding: 0; margin: 0;
+      display: flex; flex-direction: column; gap: 4px;
+      font-size: .75rem; color: var(--text-muted);
+    }
+    .generate-cta ul li::before { content: "•  "; color: var(--bank-blue-lt); }
+    .admin-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 6px;
+      background: rgba(255,255,255,.12); color: rgba(255,255,255,.85);
+      font-size: .78rem; font-weight: 500; border: 1px solid rgba(255,255,255,.2);
+      margin-right: 6px; transition: background .2s;
+    }
+    .admin-link:hover { background: rgba(255,255,255,.2); }
+
+    /* ── Upload Overlay ── */
+    .ov-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(15, 23, 42, .55);
+      backdrop-filter: blur(3px);
+      display: none; align-items: flex-start; justify-content: center;
+      z-index: 1000;
+      padding: 32px 16px; overflow-y: auto;
+      animation: ov-fade .18s ease-out;
+    }
+    .ov-backdrop.show { display: flex; }
+    @keyframes ov-fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes ov-rise { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
+
+    .ov-modal {
+      width: 100%; max-width: 720px;
+      background: #fff; border-radius: 14px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      overflow: hidden;
+      animation: ov-rise .22s cubic-bezier(.16,1,.3,1);
+      display: flex; flex-direction: column;
+      max-height: calc(100vh - 64px);
+    }
+    .ov-head {
+      padding: 18px 22px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+      background: linear-gradient(135deg, var(--bank-blue) 0%, var(--bank-blue-lt) 100%);
+      color: #fff;
+    }
+    .ov-head h3 { font-size: 1rem; font-weight: 700; flex: 1; }
+    .ov-head .ov-sub { font-size: .72rem; opacity: .8; margin-left: 10px; }
+    .ov-close {
+      background: rgba(255,255,255,.15); border: none; color: #fff;
+      width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+      font-size: 1.1rem; line-height: 1; transition: background .15s;
+    }
+    .ov-close:hover { background: rgba(255,255,255,.3); }
+    .ov-body { padding: 22px; overflow-y: auto; }
+
+    .ov-file-grid { display: grid; gap: 10px; }
+    .ov-file-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
+    .ov-file-row label {
+      font-size: .78rem; font-weight: 600; color: var(--text-main);
+    }
+    .ov-file-row input[type="file"] {
+      width: 100%; font-size: .78rem; padding: 7px 10px;
+      border: 1.5px dashed #cbd5e1; border-radius: 7px;
+      background: var(--bg-panel-alt); cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .ov-file-row input[type="file"]:hover { border-color: var(--bank-blue-lt); background: #eff6ff; }
+    .ov-file-row input[type="file"]::file-selector-button {
+      background: #eff6ff; border: 1px solid #bfdbfe; color: var(--bank-blue);
+      padding: 4px 9px; border-radius: 5px; font-weight: 600;
+      margin-right: 9px; cursor: pointer; font-size: .72rem;
+    }
+
+    .ov-meta-row {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+      margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--border);
+    }
+    .ov-meta-row label { font-size: .78rem; font-weight: 600; }
+    .ov-meta-row select, .ov-meta-row input {
+      width: 100%; padding: 8px 10px; border: 1.5px solid var(--border);
+      border-radius: 7px; font-size: .85rem; outline: none;
+    }
+
+    .ov-submit {
+      margin-top: 18px; width: 100%;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 12px;
+      background: linear-gradient(135deg, var(--bank-blue) 0%, var(--bank-blue-lt) 100%);
+      color: #fff; border: none; border-radius: 8px;
+      font-size: .92rem; font-weight: 600; cursor: pointer;
+      transition: opacity .15s, transform .12s;
+    }
+    .ov-submit:hover { opacity: .92; transform: translateY(-1px); }
+    .ov-submit:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+    /* Timeline (processing animation) */
+    .ov-timeline { display: none; }
+    .ov-timeline.show { display: block; }
+    .ov-timeline-head {
+      padding-bottom: 12px; margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ov-timeline-head h4 { font-size: .95rem; color: var(--bank-blue); font-weight: 700; }
+    .ov-timeline-head p  { font-size: .78rem; color: var(--text-muted); margin-top: 2px; }
+    .cv-step {
+      display: flex; gap: 12px;
+      padding: 10px 0; opacity: 0; transform: translateY(4px);
+      transition: opacity .25s ease, transform .25s ease;
+      position: relative;
+    }
+    .cv-step.show { opacity: 1; transform: none; }
+    .cv-icon-wrapper {
+      position: relative; z-index: 2; background: #fff;
+      width: 24px; display: flex; justify-content: center; align-items: flex-start;
+      padding-top: 2px; color: var(--text-muted);
+    }
+    .cv-icon { width: 18px; height: 18px; color: #9ca3af; }
+    .cv-line {
+      position: absolute; left: 11.5px; top: 28px; bottom: -6px;
+      width: 1.5px; background: var(--border); z-index: 1;
+    }
+    .cv-step:last-child .cv-line { display: none; }
+    .cv-content { margin-left: 12px; padding-top: 1px; flex: 1; }
+    .cv-title {
+      font-size: .9rem; color: var(--text-main);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .cv-step.active .cv-title, .cv-step.active .cv-icon { color: var(--bank-blue-lt); }
+    .cv-step.done .cv-icon { color: var(--success); }
+    .cv-step.warn .cv-title, .cv-step.warn .cv-icon { color: var(--warning); }
+    .cv-log {
+      display: none; margin-top: 6px; font-size: .76rem; color: var(--text-muted);
+      background: var(--bg-panel-alt); padding: 6px 10px;
+      border-left: 2px solid var(--border); border-radius: 0 4px 4px 0;
+      font-family: ui-monospace, monospace;
+    }
+    .icon-spinner { animation: spin .9s linear infinite; }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    .tl-actions { display: none; margin-top: 10px; gap: 8px; }
+    .tl-actions.show { display: flex; }
+    .btn-tl { padding: 6px 12px; border-radius: 6px; font-size: .78rem; font-weight: 600; cursor: pointer; border: none; }
+    .btn-tl.primary { background: var(--bank-blue); color: #fff; }
+    .btn-tl.gray    { background: #f1f5f9; color: var(--text-main); border: 1px solid var(--border); }
+    .ov-error-msg {
+      margin-top: 12px; padding: 10px 12px;
+      background: var(--error-bg); border: 1px solid #fca5a5;
+      border-radius: 7px; color: var(--error); font-size: .82rem;
+    }
+  </style>
+</head>
+<body class="dash-body">
+
+  <header class="topnav">
+    <div class="topnav-left">
+      <div class="nav-brand">
+        <div class="nav-logo">
+          <img src="{% static 'merchant/img/jbbllogo.jpg' %}" alt="Jyoti Bikas Bank Limited">
+        </div>
+        <div>
+          <div class="nav-title">{{ institution_name }}</div>
+          <div class="nav-subtitle">NRB Merchant Report System</div>
+        </div>
+      </div>
+    </div>
+    <div class="topnav-right">
+      <div class="user-pill">
+        <div class="user-avatar">{{ full_name|first|upper }}</div>
+        <div class="user-info">
+          <span class="user-name">{{ full_name }}</span>
+          <span class="user-role">{% if is_admin %}Administrator{% else %}Report Officer{% endif %}</span>
+        </div>
+      </div>
+      {% if is_admin %}
+      <a href="{% url 'admin_logs' %}" class="admin-link">
+        <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg>
+        Admin Logs
+      </a>
+      {% endif %}
+      <a href="{% url 'logout' %}" class="btn-logout">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z" clip-rule="evenodd"/></svg>
+        Logout
+      </a>
+    </div>
+  </header>
+
+  {% if messages %}
+  <div class="messages-bar">
+    {% for msg in messages %}
+    <div class="flash flash-{{ msg.tags }}">
+      {% if msg.tags == 'error' %}
+      <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+      {% else %}
+      <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+      {% endif %}
+      <span class="flash-msg-text">{{ msg }}</span>
+      <button class="flash-close" onclick="this.parentElement.remove()">&times;</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <main class="dash-main">
+
+    <!-- LEFT PANEL — Generate (link to existing multi-stage upload) -->
+    <section class="panel panel-generate">
+      <div class="panel-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <h2>Generate NRB Report</h2>
+      </div>
+      <div class="panel-subheader">
+        <span class="inst-badge">{{ institution_name }} ({{ institution_code }})</span>
+      </div>
+
+      <div class="generate-cta">
+        <p><strong>Upload your monthly data files</strong> and the pipeline will auto-classify merchants, match CBS records, prompt manual review for missing data, and produce the final NRB report.</p>
+        <ul>
+          <li>Merchant data file</li>
+          <li>Card data / FonePay / NepalPay</li>
+          <li>Cardless report</li>
+          <li>Mobile banking + Connect IPS users</li>
+        </ul>
+      </div>
+
+      <button type="button" class="btn-generate" id="openUploadOverlayBtn">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+        Start New Report
+      </button>
+    </section>
+
+    <!-- CENTER PANEL — Passed Reports (shared across all users) -->
+    <section class="panel panel-shared">
+      <div class="panel-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+        <h2>Passed Reports</h2>
+        <span class="count-badge">{{ shared_page.paginator.count }}</span>
+      </div>
+      <p class="panel-desc">Officer-verified, error-free completed reports across all users.</p>
+
+      {% if shared_page.object_list %}
+      <div class="shared-scroll-body">
+        <div class="report-table-wrapper">
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th>Period</th>
+                <th>Institution</th>
+                <th>Status</th>
+                <th>Records</th>
+                <th>FonePay</th>
+                <th>Nepalpay</th>
+                <th>Generated</th>
+                <th>Download</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for batch in shared_page %}
+              <tr>
+                <td><strong>{{ batch.month }} {{ batch.year }}</strong></td>
+                <td class="inst-cell">{{ batch.institution_name }} ({{ batch.institution_code }})</td>
+                <td><span class="status-badge status-{{ batch.status }}">&check; {{ batch.status }}</span></td>
+                <td class="num-cell">{{ batch.total_records|default:"—" }}</td>
+                <td class="num-cell">{{ batch.fonepay_count|default:"—" }}</td>
+                <td class="num-cell">{{ batch.nepalpay_count|default:"—" }}</td>
+                <td class="date-cell">
+                  {% if batch.processed_at %}{{ batch.processed_at|date:"d M Y, H:i" }}
+                  {% else %}{{ batch.created_at|date:"d M Y, H:i" }}{% endif %}
+                  <div class="by-user">by {{ batch.generated_by_name|default:batch.generated_by }}</div>
+                </td>
+                <td class="dl-cell">
+                  {% if batch.final_report_filename %}
+                  <a href="{% url 'download_final' batch.pk %}" class="btn-dl btn-bfi">&darr; Final Report</a>
+                  {% else %}
+                  <span style="color:var(--text-light);font-size:.7rem">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="shared-pagination-footer">
+        {% include "merchant/_pagination.html" with page=shared_page param="sh_page" %}
+      </div>
+
+      {% else %}
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <p>No verified reports yet. Officers can mark reports as error-free from My Activity.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <!-- DIVIDER -->
+    <div class="panel-divider" id="panel-divider" title="Hide / Show My Activity">
+      <span class="panel-divider-icon">&#8250;</span>
+    </div>
+
+    <!-- RIGHT PANEL — My Activity -->
+    <section class="panel panel-my-logs" id="my-logs">
+      <div class="panel-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+        <h2>My Activity</h2>
+      </div>
+      <p class="panel-desc">Your personal report generation history.</p>
+
+      {% if my_page.object_list %}
+      <div class="my-logs-list">
+        {% for batch in my_page %}
+        <div class="log-card {% if batch.status == 'error' %}log-error{% elif batch.status == 'completed' %}log-ok{% else %}log-pending{% endif %}">
+          <div class="log-card-top">
+            <div class="log-period">{{ batch.month }} {{ batch.year }}</div>
+            <span class="status-dot status-dot-{{ batch.status }}" title="{{ batch.status }}"></span>
+          </div>
+
+          <div class="log-meta-grid">
+            <div class="log-meta-item">
+              <span class="meta-label">Status</span>
+              <span class="meta-val status-txt-{{ batch.status }}">{{ batch.get_status_display }}</span>
+            </div>
+            <div class="log-meta-item">
+              <span class="meta-label">Records</span>
+              <span class="meta-val">{{ batch.total_records|default:"—" }}</span>
+            </div>
+            <div class="log-meta-item">
+              <span class="meta-label">FonePay</span>
+              <span class="meta-val">{{ batch.fonepay_count|default:"—" }}</span>
+            </div>
+            <div class="log-meta-item">
+              <span class="meta-label">Generated</span>
+              <span class="meta-val">{{ batch.created_at|date:"d M Y" }}</span>
+              <span class="meta-label" style="font-size:.67rem;margin-top:1px;letter-spacing:.02em;">{{ batch.created_at|date:"H:i" }}</span>
+            </div>
+          </div>
+
+          <!-- File chips -->
+          <div class="log-files" style="position: relative;">
+            <details style="font-size: 0.75rem; width: 100%; background: #f8fafc; border-radius: 6px;">
+              <summary style="cursor: pointer; padding: 6px 10px; font-weight: 500; outline: none; list-style: none; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--border); border-radius: 6px;">
+                <span>&#128194; Download Input Files</span>
+                <span style="font-size: 0.7rem; color: var(--text-muted);">▼</span>
+              </summary>
+              <div style="position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 50; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); background: #ffffff; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                {% if batch.unique_id %}
+                <a href="/download/upload_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.upload_filename }}">&#128202; Total Merchant File</a>
+                <a href="/download/card_data_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.card_data_filename }}">&#128179; Card Data</a>
+                <a href="/download/phonepay_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.phonepay_filename }}">&#128203; FonePay Details</a>
+                <a href="/download/nepalpay_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.nepalpay_filename }}">&#128203; NepalPay Details</a>
+                <a href="/download/cardless_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.cardless_filename }}">&#128241; Cardless Report</a>
+                <a href="/download/mb_users_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.mobile_banking_filename }}">&#128100; Mobile Banking</a>
+                <a href="/download/ips_users_{{ batch.unique_id }}.xlsx/" class="file-chip" style="text-decoration: none;" title="{{ batch.connect_ips_filename }}">&#128100; Connect IPS</a>
+                {% else %}
+                <span style="color: var(--text-muted); font-style: italic;">Temporary files not available.</span>
+                {% endif %}
+              </div>
+            </details>
+          </div>
+
+          {% if batch.status == 'processing' and batch.unique_id %}
+          <div style="padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:.72rem;color:#92400e">
+            <strong>In progress.</strong>
+            <a href="{% url 'finalize_report' batch.unique_id %}" style="color:#92400e;text-decoration:underline">Resume</a>
+          </div>
+          {% endif %}
+
+          {% if batch.status == 'error' and batch.error_message %}
+          <div class="log-error-msg">
+            <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+            <span>{{ batch.error_message|truncatechars:180 }}</span>
+          </div>
+          {% endif %}
+
+          <div class="log-card-actions">
+            {% if batch.status == 'completed' and batch.final_report_filename %}
+            <a href="{% url 'download_final' batch.pk %}" class="btn-dl btn-bfi btn-sm">&darr; Final Report</a>
+            {% endif %}
+
+            {% if batch.status == 'completed' and not batch.has_errors %}
+            <form method="post" action="{% url 'toggle_verified' batch.pk %}" style="display:inline;margin-left:auto">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{% url 'dashboard' %}">
+              <label class="verify-label {% if batch.verified %}verified{% endif %}"
+                     title="{% if batch.verified %}Verified — visible in Passed Reports. Click to unverify.{% else %}Mark as error-free to publish to Passed Reports{% endif %}">
+                <input type="checkbox" {% if batch.verified %}checked{% endif %} onchange="this.form.submit()">
+                <span class="verify-check-icon">{% if batch.verified %}&check;{% else %}&#9675;{% endif %}</span>
+                <span>Error-free</span>
+              </label>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      {% include "merchant/_pagination.html" with page=my_page param="my_page" %}
+
+      {% else %}
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+        <p>No activity yet. Generate your first report.</p>
+      </div>
+      {% endif %}
+    </section>
+
+  </main>
+
+  <!-- ─────────────────────────────────────────────────────────────────
+       UPLOAD OVERLAY — opened by "Start New Report"
+       Contains the upload form + in-place processing animation.
+       ───────────────────────────────────────────────────────────────── -->
+  <div class="ov-backdrop" id="uploadOverlay" role="dialog" aria-modal="true" aria-labelledby="ovTitle">
+    <div class="ov-modal">
+      <div class="ov-head">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <h3 id="ovTitle">Start New NRB Report</h3>
+        <span class="ov-sub">Upload &amp; process</span>
+        <button type="button" class="ov-close" id="ovCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div class="ov-body">
+
+        <!-- ── Upload form ── -->
+        <form id="ovUploadForm" enctype="multipart/form-data">
+          {% csrf_token %}
+          <div class="ov-file-grid">
+            <div class="ov-file-row"><label>Total Merchant File (FonePay + NepalPay)</label>
+              <input type="file" name="file" accept=".xlsx,.xls" required></div>
+            <div class="ov-file-row"><label>Card Data</label>
+              <input type="file" name="card_data" accept=".xlsx,.xls" required></div>
+            <div class="ov-file-row"><label>FonePay Payment Details</label>
+              <input type="file" name="phonepay_details" accept=".xlsx,.xls" required></div>
+            <div class="ov-file-row"><label>NepalPay Payment Details</label>
+              <input type="file" name="nepalpay_details" accept=".xlsx,.xls" required></div>
+            <div class="ov-file-row"><label>Cardless Report</label>
+              <input type="file" name="cardless_report" accept=".xlsx,.xls" required></div>
+            <div class="ov-file-row"><label>Mobile Banking Users Data</label>
+              <input type="file" name="mobile_banking" accept=".xlsx,.xls,.csv" required></div>
+            <div class="ov-file-row"><label>Connect IPS Users Data</label>
+              <input type="file" name="connect_ips" accept=".xlsx,.xls,.csv" required></div>
+          </div>
+
+          <div class="ov-meta-row">
+            <div>
+              <label>Month (BS)</label>
+              <select name="month" required>
+                {% for m in bs_months %}<option value="{{ m }}" {% if m == 'Ashwin' %}selected{% endif %}>{{ m }}</option>{% endfor %}
+              </select>
+            </div>
+            <div>
+              <label>Year (BS)</label>
+              <select name="year" required>
+                {% for y in bs_years %}<option value="{{ y }}" {% if y == 2082 %}selected{% endif %}>{{ y }}</option>{% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" class="ov-submit" id="ovSubmitBtn">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+            Proceed
+          </button>
+          <div id="ovError" class="ov-error-msg" style="display:none"></div>
+        </form>
+
+        <!-- ── Processing timeline (revealed after Proceed) ── -->
+        <div class="ov-timeline" id="ovTimeline">
+          <div class="ov-timeline-head">
+            <h4>Processing Agent</h4>
+            <p id="ovTimelineSub">Executing automated reporting pipeline...</p>
+          </div>
+          <div id="ovTlList"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Panel divider toggle ──
+    (function() {
+      const divider = document.getElementById('panel-divider');
+      const sidebar = document.getElementById('my-logs');
+      const main    = document.querySelector('.dash-main');
+      if (!divider || !sidebar || !main) return;
+
+      const KEY = 'merchant.myActivityHidden';
+      if (localStorage.getItem(KEY) === '1') {
+        sidebar.classList.add('sidebar-collapsed');
+        main.classList.add('sidebar-hidden');
+        divider.classList.add('sidebar-is-hidden');
+      }
+
+      divider.addEventListener('click', () => {
+        const hide = !sidebar.classList.contains('sidebar-collapsed');
+        sidebar.classList.toggle('sidebar-collapsed', hide);
+        main.classList.toggle('sidebar-hidden', hide);
+        divider.classList.toggle('sidebar-is-hidden', hide);
+        localStorage.setItem(KEY, hide ? '1' : '0');
+      });
+    })();
+
+    // ── Upload Overlay logic ──
+    (function() {
+      const openBtn   = document.getElementById('openUploadOverlayBtn');
+      const overlay   = document.getElementById('uploadOverlay');
+      const closeBtn  = document.getElementById('ovCloseBtn');
+      const form      = document.getElementById('ovUploadForm');
+      const submitBtn = document.getElementById('ovSubmitBtn');
+      const errBox    = document.getElementById('ovError');
+      const timeline  = document.getElementById('ovTimeline');
+      const tlList    = document.getElementById('ovTlList');
+      const tlSub     = document.getElementById('ovTimelineSub');
+      if (!openBtn || !overlay) return;
+
+      let uid = null, pollTimer = null, isProcessing = false;
+
+      const stepLabels = [
+        "Reading Excel workbook to understand structure",
+        "Filtering required columns for FonePay & NepalPay",
+        "Querying Core Banking System for account details",
+        "Enriching merchant records with CBS data",
+        "Validating merchant geographical data completeness",
+        "Enriching Mobile Banking & Connect IPS users via CBS",
+        "Validating payment detail geo & gender data via CBS",
+        "Compiling final regulatory report formats"
+      ];
+      const TOTAL_STEPS = 8;
+
+      const iconDoc = `<svg class="cv-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>`;
+      const iconSpin = `<svg class="cv-icon icon-spinner" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
+      const iconCheck= `<svg class="cv-icon" fill="none" stroke="#16a34a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`;
+      const iconWarn = `<svg class="cv-icon" fill="none" stroke="#d97706" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`;
+
+      function open() {
+        overlay.classList.add('show');
+        document.body.style.overflow = 'hidden';
+      }
+      function close() {
+        if (isProcessing && !confirm('Pipeline is still processing. Close anyway? (it will keep running in background)')) return;
+        overlay.classList.remove('show');
+        document.body.style.overflow = '';
+      }
+
+      openBtn.addEventListener('click', open);
+      closeBtn.addEventListener('click', close);
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.classList.contains('show')) close(); });
+
+      function buildTimeline() {
+        tlList.innerHTML = '';
+        for (let i = 1; i <= TOTAL_STEPS; i++) {
+          const isLast = (i === TOTAL_STEPS);
+          const hasActions = (i === 5 || i === 6 || i === 7);
+          tlList.insertAdjacentHTML('beforeend', `
+            <div class="cv-step" id="ov-step-${i}">
+              <div class="cv-icon-wrapper" id="ov-iconWrap-${i}">${iconDoc}</div>
+              ${!isLast ? '<div class="cv-line"></div>' : ''}
+              <div class="cv-content">
+                <div class="cv-title" id="ov-title-${i}">${stepLabels[i-1]}</div>
+                <div class="cv-log" id="ov-log-${i}"></div>
+                ${hasActions ? `
+                <div class="tl-actions" id="ov-actionBtns-${i}">
+                  <button type="button" class="btn-tl primary" id="ov-btnProceed-${i}">Proceed without data</button>
+                  <button type="button" class="btn-tl gray"    id="ov-btnResolve-${i}">Resolve manually</button>
+                </div>` : ''}
+              </div>
+            </div>
+          `);
+        }
+      }
+
+      function setStep(num, state, logText) {
+        const step = document.getElementById(`ov-step-${num}`);
+        const wrap = document.getElementById(`ov-iconWrap-${num}`);
+        const log  = document.getElementById(`ov-log-${num}`);
+        if (!step) return;
+        step.classList.add('show');
+        step.className = `cv-step show ${state}`;
+        if (logText && log) { log.style.display = 'block'; log.textContent = logText; }
+        if (state === 'active') wrap.innerHTML = iconSpin;
+        else if (state === 'done') wrap.innerHTML = (num === TOTAL_STEPS) ? iconCheck : iconDoc;
+        else if (state === 'warn') wrap.innerHTML = iconWarn;
+      }
+
+      function pollProgress() {
+        fetch('/api/progress/' + uid + '/')
+          .then(r => r.json())
+          .then(handleProgress)
+          .catch(e => console.error(e));
+      }
+
+      function handleProgress(d) {
+        const step = d.step, status = d.status, logText = d.log;
+        for (let i = 1; i < step; i++) setStep(i, 'done');
+
+        if (status === 'active') {
+          setStep(step, 'active', logText);
+        }
+        else if (status === 'action_required') {
+          clearInterval(pollTimer);
+          setStep(step, 'warn', logText);
+          const box = document.getElementById('ov-actionBtns-' + step);
+          if (box) box.classList.add('show');
+          tlSub.textContent = 'Waiting for user input.';
+
+          let reviewUrl;
+          if (step === 6)      reviewUrl = '/users-review/'   + uid + '/';
+          else if (step === 7) reviewUrl = '/payment-review/' + uid + '/';
+          else                 reviewUrl = '/review/'         + uid + '/';
+
+          const proceedBtn = document.getElementById('ov-btnProceed-' + step);
+          if (proceedBtn) proceedBtn.onclick = function() {
+            if (box) box.classList.remove('show');
+            setStep(step, 'done', 'Ignored missing data. Proceeding...');
+            tlSub.textContent = 'Executing automated reporting pipeline...';
+            setTimeout(() => {
+              setStep(TOTAL_STEPS, 'active');
+              fetch('/api/finalize/' + uid + '/')
+                .then(r => r.json())
+                .then(res => {
+                  if (res.status === 'error') { showError('Error: ' + res.detail); return; }
+                  pollTimer = setInterval(pollProgress, 800);
+                });
+            }, 400);
+          };
+          const resolveBtn = document.getElementById('ov-btnResolve-' + step);
+          if (resolveBtn) resolveBtn.onclick = () => {
+            // Lock the overlay's action area + show navigation status so users
+            // don't double-click while the review page loads.
+            if (proceedBtn) proceedBtn.disabled = true;
+            resolveBtn.disabled = true;
+            resolveBtn.textContent = 'Opening review…';
+            tlSub.textContent = 'Loading manual review page…';
+            window.location.href = reviewUrl;
+          };
+        }
+        else if (status === 'complete') {
+          clearInterval(pollTimer);
+          for (let i = 1; i <= TOTAL_STEPS; i++) setStep(i, 'done');
+          tlSub.textContent = 'Done — opening report...';
+          setTimeout(() => { window.location.href = '/finalize/' + uid + '/'; }, 700);
+        }
+        else if (status === 'error') {
+          clearInterval(pollTimer);
+          isProcessing = false;
+          showError('Error: ' + (d.detail || 'Unknown error'));
+        }
+      }
+
+      function showError(msg) {
+        errBox.textContent = msg;
+        errBox.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg> Retry`;
+      }
+
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        errBox.style.display = 'none';
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<svg class="icon-spinner" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Starting...`;
+
+        // Hide form, show timeline
+        form.style.display = 'none';
+        timeline.classList.add('show');
+        buildTimeline();
+        isProcessing = true;
+
+        fetch('/api/start/', { method: 'POST', body: new FormData(form) })
+          .then(r => r.json())
+          .then(data => {
+            if (data.error) { showError(data.error); form.style.display = ''; timeline.classList.remove('show'); return; }
+            uid = data.unique_id;
+            pollTimer = setInterval(pollProgress, 600);
+          })
+          .catch(err => { showError('Failed: ' + err); form.style.display = ''; timeline.classList.remove('show'); });
+      });
+    })();
+  </script>
+</body>
+</html>

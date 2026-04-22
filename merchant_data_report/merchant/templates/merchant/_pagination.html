@@ -1,0 +1,18 @@
+{% if page.has_other_pages %}
+<div class="pagination">
+  {% if page.has_previous %}
+  <a href="?{{ param }}={{ page.previous_page_number }}" class="pg-btn">&#8249; Prev</a>
+  {% else %}
+  <span class="pg-btn pg-disabled">&#8249; Prev</span>
+  {% endif %}
+
+  <span class="pg-info">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+  <span class="pg-total">({{ page.paginator.count }} total)</span>
+
+  {% if page.has_next %}
+  <a href="?{{ param }}={{ page.next_page_number }}" class="pg-btn">Next &#8250;</a>
+  {% else %}
+  <span class="pg-btn pg-disabled">Next &#8250;</span>
+  {% endif %}
+</div>
+{% endif %}

@@ -125,8 +125,57 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+
+# ── Hardcoded users — replaces Django auth. Reads via request.session['user']. ─
+HARDCODED_USERS = {
+    'admin':       {'password': 'admin123', 'full_name': 'System Administrator'},
+    'nrb_officer': {'password': 'nrb2082',  'full_name': 'NRB Officer'},
+    'jyotibikash': {'password': 'jbb2082',  'full_name': 'Jyoti Bikas Bank Officer'},
+}
+
+INSTITUTION_NAME = 'Jyoti Bikas Bank Limited'
+INSTITUTION_CODE = '12060'
+
+# ── Logging — user activity written to logs/activity.log, rotated daily ───────
+os.makedirs(BASE_DIR / 'logs', exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'activity': {'format': '%(message)s'},
+    },
+    'handlers': {
+        'activity_file': {
+            'class':       'logging.handlers.TimedRotatingFileHandler',
+            'filename':    BASE_DIR / 'logs' / 'activity.log',
+            'when':        'midnight',
+            'interval':    1,
+            'backupCount': 90,
+            'encoding':    'utf-8',
+            'formatter':   'activity',
+            # delay=True defers opening the file until first write — avoids
+            # Windows WinError 32 when Django auto-reloader holds the file
+            # open in two processes during midnight rotation.
+            'delay':       True,
+        },
+    },
+    'loggers': {
+        'merchant.activity': {
+            'handlers':  ['activity_file'],
+            'level':     'DEBUG',
+            'propagate': False,
+        },
+    },
+}

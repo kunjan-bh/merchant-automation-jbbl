@@ -12,9 +12,13 @@ import json
 import threading
 import re
 from datetime import date, datetime, timedelta
-from .models import CBSMerchant, CleanCBS
+from django.utils import timezone
+from django.shortcuts import redirect
+from .models import CBSMerchant, CleanCBS, ReportBatch
 from .cbs_source import cbs_lookup as _cbs_source_lookup, cbs_accounts_in_set, normalize_cbs_record
 from .country_codes import calculate_age as _calculate_age
+from .auth import login_required_custom
+from .logger import log_generate_start, log_generate_success, log_generate_error, log_download
 
 # --- HELPER FUNCTIONS ---
 
@@ -65,6 +69,14 @@ def get_fill_col(acc_col_name, cbs_lookup):
         return val
     return fill_col
 
+def _is_valid_gender(v):
+    """True only for canonical gender codes. Junk like CBS Cust IDs or branch
+    codes leaking into NepalPay's gender column should be treated as missing."""
+    if v is None: return False
+    s = str(v).strip().upper()
+    if not s or s in ('NULL', 'NAN', 'NONE'): return False
+    return s in ('M', 'F', 'O', 'C')
+
 def check_missing_records(df, required_cols, index_col):
     missing_dict = {}
     if df is None or df.empty or not index_col:
@@ -72,7 +84,7 @@ def check_missing_records(df, required_cols, index_col):
     for _, row in df.iterrows():
         acc = str(row.get(index_col)).strip()
         if not acc or is_empty(acc): continue
-        
+
         missing = []
         for c in required_cols:
             val = row.get(c)
@@ -85,8 +97,13 @@ def check_missing_records(df, required_cols, index_col):
                 missing.append(c)
             elif c == 'municipality' and map_local(val) == 'Unmatched':
                 missing.append(c)
-            # Gender drops to Company automatically if unknown per logic, so we only flag if strictly IS_EMPTY
-            
+
+        # Gender is graded separately — junk values (e.g. CBS Cust IDs leaking
+        # in from a misaligned NepalPay export) flag the dropdown on rows
+        # already being reviewed for other reasons. Don't promote a row into
+        # review just for gender — that would balloon the review queue.
+        gender_invalid = not _is_valid_gender(row.get('gender'))
+
         if missing or row.get('_invalid_format') == True:
             if acc not in missing_dict:
                 missing_dict[acc] = {
@@ -96,24 +113,28 @@ def check_missing_records(df, required_cols, index_col):
                     'needs_province': 'province' in missing,
                     'needs_district': 'district' in missing,
                     'needs_municipality': 'municipality' in missing,
-                    'needs_gender': 'gender' in missing,
+                    'needs_gender': gender_invalid,
                     'needs_account_fix': row.get('_invalid_format') == True,
                     # Store current values even if they aren't "missing" so UI can show them/POST them back
                     'province': row.get('province') if not is_empty(row.get('province')) else '',
                     'district': row.get('district') if not is_empty(row.get('district')) else '',
                     'municipality': row.get('municipality') if not is_empty(row.get('municipality')) else '',
-                    'gender': row.get('gender') if not is_empty(row.get('gender')) else '',
+                    'gender': row.get('gender') if _is_valid_gender(row.get('gender')) else '',
                 }
             else:
                 for m in missing:
                     missing_dict[acc][f'needs_{m}'] = True
+                if gender_invalid:
+                    missing_dict[acc]['needs_gender'] = True
                 if row.get('_invalid_format') == True:
                     missing_dict[acc]['needs_account_fix'] = True
                 # Optional: update values if they were empty but now found (unlikely in this loop)
-                for f in ('province', 'district', 'municipality', 'gender'):
+                for f in ('province', 'district', 'municipality'):
                     if not missing_dict[acc].get(f):
                         val = row.get(f)
                         if not is_empty(val): missing_dict[acc][f] = val
+                if not missing_dict[acc].get('gender') and _is_valid_gender(row.get('gender')):
+                    missing_dict[acc]['gender'] = row.get('gender')
     return missing_dict
 
 # --- MAPPERS ---
@@ -1863,21 +1884,80 @@ def _run_pipeline(file_path, uid):
         report = _generate_final_report(uid)
         result_info['step3_filename'] = report['step3_filename']
         _set_progress(uid, 8, 'complete', 'Report compiled successfully', extra={**result_info, 'log': 'Aggregated Province, District, Local Level, Gender and Sheet 11 Users.'})
+        _mark_batch_completed(uid, result_info)
     except Exception as e:
         _set_progress(uid, -1, 'error', str(e))
+        _mark_batch_errored(uid, str(e))
     finally:
         connection.close()
 
 
+def _mark_batch_completed(uid, result_info):
+    """Mark the ReportBatch for this unique_id as completed and save stats."""
+    try:
+        batch = ReportBatch.objects.filter(unique_id=uid).first()
+        if not batch:
+            return
+        batch.status                = 'completed'
+        batch.has_errors            = False
+        batch.processed_at          = timezone.now()
+        batch.total_records         = int(result_info.get('total_records',         0) or 0)
+        batch.fonepay_count         = int(result_info.get('fonepay_count',         0) or 0)
+        batch.nepalpay_count        = int(result_info.get('nepalpay_count',        0) or 0)
+        batch.invalid_account_count = int(result_info.get('invalid_account_count', 0) or 0)
+        batch.merged_cbs_count      = int(result_info.get('merged_cbs_count',      0) or 0)
+        batch.final_report_filename = result_info.get('step3_filename', '') or ''
+        batch.save()
+    except Exception as e:
+        print(f'[_mark_batch_completed] {e}')
+
+
+def _mark_batch_errored(uid, err):
+    try:
+        batch = ReportBatch.objects.filter(unique_id=uid).first()
+        if not batch:
+            return
+        batch.status        = 'error'
+        batch.has_errors    = True
+        batch.error_message = str(err)[:2000]
+        batch.processed_at  = timezone.now()
+        batch.save(update_fields=['status', 'has_errors', 'error_message', 'processed_at'])
+    except Exception as e:
+        print(f'[_mark_batch_errored] {e}')
+
+
+def _finalize_and_mark(uid, step3_filename):
+    """Load persisted stats for a finished pipeline run and flip the
+    ReportBatch row to `completed`. Used by the manual-review apply / skip
+    paths so batches don't sit on `processing` forever after the user leaves
+    the review page."""
+    try:
+        stats_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'stats_{uid}.json')
+        rd = {}
+        if os.path.exists(stats_path):
+            with open(stats_path, 'r') as f:
+                rd = json.load(f)
+        _mark_batch_completed(uid, {**rd, 'step3_filename': step3_filename})
+    except Exception as e:
+        print(f'[_finalize_and_mark] {e}')
+
+
 # --- VIEWS ---
 
+@login_required_custom
 def upload_merchant_data(request):
     """Serves the upload page. Processing is handled via API."""
-    return render(request, 'merchant/upload.html')
+    return render(request, 'merchant/upload.html', {
+        'user':             request.session.get('user'),
+        'full_name':        request.session.get('full_name', ''),
+        'institution_name': getattr(settings, 'INSTITUTION_NAME', ''),
+        'institution_code': getattr(settings, 'INSTITUTION_CODE', ''),
+    })
 
 
 # --- API VIEWS ---
 
+@login_required_custom
 def api_start(request):
     """Accept files, start background pipeline, return unique_id."""
     if request.method != 'POST':
@@ -1915,19 +1995,54 @@ def api_start(request):
     save_file(mobile_banking, 'mb_users')
     save_file(connect_ips, 'ips_users')
 
-    # Save report meta (month, year) for use at finalize time.
-    _save_meta(uid, {
-        'month': request.POST.get('month', ''),
-        'year':  request.POST.get('year', ''),
-    })
+    month_str = request.POST.get('month', '')
+    year_str  = request.POST.get('year',  '')
 
-    _set_progress(uid, 0, 'started', 'Pipeline initiated')
+    # Save report meta (month, year) for use at finalize time.
+    _save_meta(uid, {'month': month_str, 'year': year_str})
+
+    # ── Create ReportBatch row so this generation shows in dashboards ──
+    user      = request.session.get('user', '')
+    full_name = request.session.get('full_name', '')
+    try:
+        year_int = int(year_str) if year_str else 0
+    except (TypeError, ValueError):
+        year_int = 0
+    try:
+        batch = ReportBatch.objects.create(
+            generated_by      = user,
+            generated_by_name = full_name,
+            month             = month_str or '—',
+            year              = year_int,
+            unique_id         = uid,
+            status            = 'processing',
+            institution_name  = getattr(settings, 'INSTITUTION_NAME', 'Jyoti Bikas Bank Limited'),
+            institution_code  = getattr(settings, 'INSTITUTION_CODE', '12060'),
+            upload_filename         = file.name,
+            card_data_filename      = card_data.name,
+            phonepay_filename       = phonepay_details.name,
+            nepalpay_filename       = nepalpay_details.name,
+            cardless_filename       = cardless_report.name,
+            mobile_banking_filename = mobile_banking.name,
+            connect_ips_filename    = connect_ips.name,
+        )
+        log_generate_start(request, month_str, year_str, batch=batch)
+    except Exception as e:
+        batch = None
+        print(f'[api_start] Could not create ReportBatch: {e}')
+
+    _set_progress(uid, 0, 'started', 'Pipeline initiated',
+                  extra={'batch_id': batch.pk if batch else None})
 
     t = threading.Thread(target=_run_pipeline, args=(tmp_path, uid), daemon=True)
     t.start()
 
-    return JsonResponse({'unique_id': uid})
+    return JsonResponse({
+        'unique_id': uid,
+        'batch_id':  batch.pk if batch else None,
+    })
 
+@login_required_custom
 def api_progress(request, unique_id):
     """Return current pipeline progress as JSON."""
     path = _progress_path(unique_id)
@@ -1936,6 +2051,7 @@ def api_progress(request, unique_id):
             return JsonResponse(json.load(f))
     return JsonResponse({'step': 0, 'status': 'waiting', 'detail': 'Initializing...'})
 
+@login_required_custom
 def api_finalize(request, unique_id):
     """Start final report generation in a background thread; caller polls api_progress for completion."""
     _set_progress(unique_id, 8, 'active', 'Generating final report...')
@@ -1946,14 +2062,17 @@ def api_finalize(request, unique_id):
                 'unique_id': unique_id,
                 'step3_filename': report['step3_filename'],
             })
+            _finalize_and_mark(unique_id, report['step3_filename'])
         except Exception as e:
             _set_progress(unique_id, -1, 'error', str(e))
+            _mark_batch_errored(unique_id, str(e))
         finally:
             connection.close()
     threading.Thread(target=_run, daemon=True).start()
     return JsonResponse({'status': 'pending'})
 
 
+@login_required_custom
 def api_classify_municipality(request):
     """
     POST { "accounts": [ {"account": "...", "address_1": "...", "address_3": "...",
@@ -2397,6 +2516,7 @@ def _prepare_manual_review_data(unique_id):
     auto_resolved_count = len(all_missing) - len(truly_missing)
     return truly_missing, cbs_data, corrections, auto_resolved_count
 
+@login_required_custom
 def review_missing_data(request, unique_id):
     truly_missing, _, _, auto_resolved = _prepare_manual_review_data(unique_id)
     if truly_missing is None:
@@ -2420,6 +2540,7 @@ def review_missing_data(request, unique_id):
         'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
     })
 
+@login_required_custom
 def download_review_list(request, unique_id):
     """Generates an Excel list of all accounts currently awaiting manual review."""
     truly_missing, _, _, _ = _prepare_manual_review_data(unique_id)
@@ -2473,6 +2594,7 @@ def download_review_list(request, unique_id):
     response['Content-Disposition'] = f'attachment; filename={filename}'
     return response
 
+@login_required_custom
 def apply_manual_mapping(request, unique_id):
     if request.method == 'POST':
         f_path2 = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'step2_fonepay_{unique_id}.xlsx')
@@ -2582,29 +2704,28 @@ def apply_manual_mapping(request, unique_id):
             # Else: We do NOT delete the existing record anymore. We just don't update it to CleanCBS 
             # if it's still missing pieces. This prevents loss of work (like gender fills).
 
-        # Kick off final report generation in background then return to main page
+        # Generate final report synchronously to prevent race conditions during download
         _set_progress(unique_id, 8, 'active', 'Generating final report...')
-        def _run():
-            try:
-                report = _generate_final_report(unique_id)
-                _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
-                    'unique_id': unique_id,
-                    'step3_filename': report['step3_filename'],
-                })
-            except Exception as e:
-                _set_progress(unique_id, -1, 'error', str(e))
-            finally:
-                connection.close()
-        threading.Thread(target=_run, daemon=True).start()
-        from django.http import HttpResponseRedirect
-        return HttpResponseRedirect(f'/?resume={unique_id}')
-    return redirect('upload_merchant_data')
+        try:
+            report = _generate_final_report(unique_id)
+            _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
+                'unique_id': unique_id,
+                'step3_filename': report['step3_filename'],
+            })
+        except Exception as e:
+            _set_progress(unique_id, -1, 'error', str(e))
+            _mark_batch_errored(unique_id, str(e))
+            messages.error(request, f"Error generating report: {e}")
+            return redirect('dashboard')
+            
+        return redirect('finalize_report', unique_id=unique_id)
 
+@login_required_custom
 def finalize_report(request, unique_id):
     """Renders the full results page. Generates report if not already created."""
     step3_filename = f'Additional_Payment_Report_ASCII_{unique_id}.xlsx'
     step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
-    
+
     # Only generate if not already done (e.g. by the background pipeline or api_finalize)
     if not os.path.exists(step3_path):
         _generate_final_report(unique_id)
@@ -2628,10 +2749,25 @@ def finalize_report(request, unique_id):
     else:
         rd = {}
 
+    # Mark the ReportBatch completed (if not already) so it appears in dashboards.
+    batch = ReportBatch.objects.filter(unique_id=unique_id).first()
+    if batch and batch.status != 'completed':
+        try:
+            _mark_batch_completed(unique_id, {**rd, 'step3_filename': step3_filename})
+            batch.refresh_from_db()
+            log_generate_success(request, batch)
+        except Exception as e:
+            print(f'[finalize_report] batch update failed: {e}')
+
     context = {
         'success': True,
         'unique_id': unique_id,
         'step3_filename': step3_filename,
+        'batch_id': batch.pk if batch else None,
+        'user':             request.session.get('user'),
+        'full_name':        request.session.get('full_name', ''),
+        'institution_name': getattr(settings, 'INSTITUTION_NAME', ''),
+        'institution_code': getattr(settings, 'INSTITUTION_CODE', ''),
         'fonepay_count': rd.get('fonepay_count', 0),
         'nepalpay_count': rd.get('nepalpay_count', 0),
         'total_records': rd.get('total_records', 0),
@@ -2651,6 +2787,7 @@ def finalize_report(request, unique_id):
     }
     return render(request, 'merchant/upload.html', context)
 
+@login_required_custom
 def download_sheet(request, filename):
     file_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', filename)
     if os.path.exists(file_path):
@@ -2661,6 +2798,7 @@ def download_sheet(request, filename):
 
 # --- Sheet 11 Users Review (Option B: separate review page) ---
 
+@login_required_custom
 def users_review(request, unique_id):
     """Render manual-review form for MB/IPS rows whose CBS lookup was incomplete."""
     from .processors_users import load_rows, collect_missing
@@ -2683,6 +2821,7 @@ def users_review(request, unique_id):
     })
 
 
+@login_required_custom
 def users_apply(request, unique_id):
     """Accept user-filled values for MB/IPS missing records, persist, proceed."""
     if request.method != 'POST':
@@ -2740,6 +2879,7 @@ def users_apply(request, unique_id):
 
 # --- Payment Detail Missing Data Review ---
 
+@login_required_custom
 def payment_detail_review(request, unique_id):
     """Show missing province/district/municipality/gender for payment-detail accounts."""
     missing = _check_payment_detail_missing(unique_id)
@@ -2760,6 +2900,7 @@ def payment_detail_review(request, unique_id):
     })
 
 
+@login_required_custom
 def payment_detail_apply(request, unique_id):
     """Save user-entered values for payment-detail missing accounts into CBS, then finalize."""
     if request.method != 'POST':

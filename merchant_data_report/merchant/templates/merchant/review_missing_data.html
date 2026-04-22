@@ -220,6 +220,49 @@
             font-weight: 600;
         }
 
+        .warn-pill {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 999px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            line-height: 1.5;
+            white-space: nowrap;
+        }
+        .warn-invalid { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+        .warn-nocbs   { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+
+        /* Full-screen navigation overlay — locks UI while page transitions. */
+        .nav-overlay {
+            position: fixed; inset: 0;
+            background: rgba(15, 23, 42, .55);
+            backdrop-filter: blur(2px);
+            display: none; align-items: center; justify-content: center;
+            z-index: 9999;
+        }
+        .nav-overlay.show { display: flex; }
+        .nav-overlay-card {
+            background: #fff; border-radius: 12px;
+            padding: 28px 36px;
+            box-shadow: 0 20px 60px rgba(0,0,0,.35);
+            display: flex; flex-direction: column; align-items: center; gap: 14px;
+            min-width: 260px;
+        }
+        .nav-overlay-spinner {
+            width: 44px; height: 44px;
+            border: 4px solid #e5e7eb;
+            border-top-color: var(--accent-color);
+            border-radius: 50%;
+            animation: nav-spin .9s linear infinite;
+        }
+        @keyframes nav-spin { 100% { transform: rotate(360deg); } }
+        .nav-overlay-text {
+            font-size: .92rem; font-weight: 600;
+            color: var(--text-main);
+        }
+        .nav-overlay-sub {
+            font-size: .78rem; color: var(--text-muted);
+        }
     </style>
 </head>
 <body>
@@ -274,20 +317,24 @@
                             <td>
                                 {% if row.needs_account_fix %}
                                 <div style="display: flex; flex-direction: column; gap: 4px;">
-                                    <input type="text" name="new_account_{{ row.account_number }}" 
-                                           value="{{ row.account_number }}" 
+                                    <input type="text" name="new_account_{{ row.account_number }}"
+                                           value="{{ row.account_number }}"
                                            class="editable-acc"
                                            placeholder="Fix account number">
-                                    <span style="font-size: 0.7rem; color: #f97316; font-weight: 600;">⚠ Invalid Account</span>
                                 </div>
                                 {% else %}
                                 <strong>{{ row.account_number }}</strong>
                                 {% endif %}
                                 <br>
                                 <span style="font-size: 0.75rem; color: #0284c7; font-weight: 500;">{{ row.platform }}</span>
-                                {% if row.not_in_cbs and not row.needs_account_fix %}
-                                <br><span style="font-size: 0.7rem; color: #f97316; font-weight: 600;">⚠ Not in CBS</span>
-                                {% endif %}
+                                <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:4px;">
+                                    {% if row.needs_account_fix %}
+                                    <span class="warn-pill warn-invalid">⚠ Invalid Account</span>
+                                    {% endif %}
+                                    {% if row.not_in_cbs %}
+                                    <span class="warn-pill warn-nocbs">⚠ Not in CBS</span>
+                                    {% endif %}
+                                </div>
                             </td>
                             <td>{{ row.address_1 }}</td>
                             <td>{{ row.address_3 }}</td>
@@ -378,9 +425,18 @@
 
             <div style="display: flex; gap: 1rem; margin-top: 2rem; justify-content: flex-end; align-items: center;">
                 <button type="button" id="btnCancel" onclick="proceedWithoutUpdates()" style="background:none; border:none; color: var(--text-muted); font-weight: 500; font-size: 0.95rem; cursor:pointer; padding:0;">Cancel &amp; Proceed Without Updates</button>
-                <button type="submit" class="btn-submit">Apply Mappings</button>
+                <button type="submit" id="btnApply" class="btn-submit">Apply Mappings</button>
             </div>
         </form>
+    </div>
+
+    <!-- Full-screen loading overlay — locks UI while pipeline finishes / page navigates. -->
+    <div class="nav-overlay" id="navOverlay" aria-live="polite" aria-busy="true">
+        <div class="nav-overlay-card">
+            <div class="nav-overlay-spinner"></div>
+            <div class="nav-overlay-text" id="navOverlayText">Working…</div>
+            <div class="nav-overlay-sub" id="navOverlaySub">Please wait, do not refresh the page.</div>
+        </div>
     </div>
 
 <script>
@@ -526,17 +582,39 @@ function getCookie(name) {
     return cookieValue;
 }
 
+function showNavOverlay(title, sub) {
+    const ov = document.getElementById('navOverlay');
+    if (!ov) return;
+    document.getElementById('navOverlayText').textContent = title || 'Working…';
+    document.getElementById('navOverlaySub').textContent  = sub   || 'Please wait, do not refresh the page.';
+    ov.classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+
 function proceedWithoutUpdates() {
     const btn = document.getElementById('btnCancel');
     btn.disabled = true;
     btn.textContent = 'Going back…';
-    // Fire the finalize job then immediately return to the main page.
-    // The pipeline animation there will show step 8 progress and redirect when done.
+    showNavOverlay('Skipping manual updates…', 'Returning to the dashboard.');
+    // Fire the finalize job then immediately return to the dashboard.
+    // The dashboard's overlay animation picks up where this left off.
     fetch('/api/finalize/{{ unique_id }}/')
         .finally(() => {
-            window.location.href = '/?resume={{ unique_id }}';
+            window.location.href = '/dashboard/?resume={{ unique_id }}';
         });
 }
+
+// Lock the UI when the form is submitted (Apply Mappings).
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.querySelector('form');
+    if (form) {
+        form.addEventListener('submit', function () {
+            const apply = document.getElementById('btnApply');
+            if (apply) { apply.disabled = true; apply.textContent = 'Applying…'; }
+            showNavOverlay('Applying mappings…', 'Generating the final report — this can take a minute.');
+        });
+    }
+});
 </script>
 </body>
 </html>

@@ -1,0 +1,214 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — Activity Logs</title>
+  <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+  <style>
+    .admin-wrap { max-width: 1400px; margin: 20px auto; padding: 0 28px; }
+    .admin-grid { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+    .filters-row {
+      display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px;
+      background: var(--bg-panel); padding: 14px; border-radius: 10px;
+      box-shadow: var(--shadow); margin-bottom: 14px; align-items: end;
+    }
+    .filters-row label { font-size: .7rem; color: var(--text-muted); display: block; margin-bottom: 3px; font-weight: 600; }
+    .filters-row input, .filters-row select {
+      width: 100%; padding: 7px 10px; border: 1.5px solid var(--border); border-radius: 6px; font-size: .82rem;
+    }
+    .filter-btn {
+      padding: 8px 14px; background: var(--bank-blue); color: #fff;
+      border: none; border-radius: 6px; font-size: .82rem; font-weight: 600; cursor: pointer;
+    }
+    .logs-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+    .logs-table th { background: var(--bank-blue); color: #fff; padding: 9px 10px; text-align: left; position: sticky; top: 0; }
+    .logs-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .logs-table tr:hover { background: #f8faff; }
+    .level-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: .68rem; font-weight: 700;
+    }
+    .level-INFO    { background: #eff6ff; color: #1d4ed8; }
+    .level-WARNING { background: #fffbeb; color: #92400e; }
+    .level-ERROR   { background: #fef2f2; color: #b91c1c; }
+    .action-pill {
+      display: inline-block; padding: 2px 7px; border-radius: 4px;
+      font-size: .67rem; font-family: monospace; font-weight: 600;
+      background: #f1f5f9; color: #374151;
+    }
+    .action-GENERATE_SUCCESS { background: #dcfce7; color: #15803d; }
+    .action-GENERATE_ERROR   { background: #fef2f2; color: #b91c1c; }
+    .action-LOGIN_FAIL       { background: #fffbeb; color: #92400e; }
+    .action-VERIFY           { background: #dcfce7; color: #15803d; }
+    .side-card {
+      background: var(--bg-panel); border-radius: 10px; padding: 16px;
+      box-shadow: var(--shadow); margin-bottom: 14px;
+    }
+    .side-card h3 { font-size: .9rem; color: var(--bank-blue); margin-bottom: 10px; border-bottom: 2px solid var(--bank-blue); padding-bottom: 6px; }
+    .side-list { list-style: none; padding: 0; margin: 0; }
+    .side-list li { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: .78rem; }
+    .side-list li:last-child { border-bottom: none; }
+    .err-item { color: var(--error); }
+    .err-item strong { display: block; font-size: .82rem; color: var(--text-main); }
+    .err-item small { color: var(--text-muted); font-size: .7rem; }
+    .log-file { display: flex; justify-content: space-between; align-items: center; }
+    .log-file a { color: var(--bank-blue-lt); font-weight: 600; }
+    .log-file span { color: var(--text-muted); font-size: .7rem; }
+    .back-link { color: var(--bank-gold); text-decoration: underline; font-size: .8rem; }
+  </style>
+</head>
+<body class="dash-body">
+
+  <header class="topnav">
+    <div class="topnav-left">
+      <div class="nav-brand">
+        <div>
+          <div class="nav-title">Admin — Activity Logs</div>
+          <div class="nav-subtitle">System Audit Trail</div>
+        </div>
+      </div>
+    </div>
+    <div class="topnav-right">
+      <div class="user-pill">
+        <div class="user-avatar">{{ full_name|first|upper }}</div>
+        <div class="user-info">
+          <span class="user-name">{{ full_name }}</span>
+          <span class="user-role">Administrator</span>
+        </div>
+      </div>
+      <a href="{% url 'dashboard' %}" class="btn-logout">&larr; Dashboard</a>
+      <a href="{% url 'logout' %}" class="btn-logout">Logout</a>
+    </div>
+  </header>
+
+  <div class="admin-wrap">
+
+    <form method="get" class="filters-row">
+      <div>
+        <label>User</label>
+        <select name="user">
+          <option value="">All</option>
+          {% for u in all_users %}
+          <option value="{{ u }}" {% if filters.user == u %}selected{% endif %}>{{ u }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Level</label>
+        <select name="level">
+          <option value="">All</option>
+          {% for code, label in level_choices %}
+          <option value="{{ code }}" {% if filters.level == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Action</label>
+        <select name="action">
+          <option value="">All</option>
+          {% for code, label in action_choices %}
+          <option value="{{ code }}" {% if filters.action == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Date (YYYY-MM-DD)</label>
+        <input type="date" name="date" value="{{ filters.date }}">
+      </div>
+      <div>
+        <label>Search (detail / IP)</label>
+        <input type="text" name="q" value="{{ filters.q }}" placeholder="Contains...">
+      </div>
+      <div>
+        <button type="submit" class="filter-btn">Filter</button>
+      </div>
+    </form>
+
+    <div class="admin-grid">
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2>Activity Log</h2>
+          <span class="count-badge">{{ page.paginator.count }}</span>
+        </div>
+
+        {% if page.object_list %}
+        <div style="max-height: 70vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px">
+          <table class="logs-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Level</th>
+                <th>User</th>
+                <th>IP</th>
+                <th>Action</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for log in page %}
+              <tr>
+                <td class="date-cell">{{ log.timestamp|date:"Y-m-d H:i:s" }}</td>
+                <td><span class="level-pill level-{{ log.level }}">{{ log.level }}</span></td>
+                <td><strong>{{ log.username }}</strong><br><small style="color:var(--text-muted)">{{ log.full_name }}</small></td>
+                <td class="inst-cell">{{ log.ip_address|default:"—" }}</td>
+                <td><span class="action-pill action-{{ log.action }}">{{ log.action }}</span></td>
+                <td>{{ log.detail|default:"—"|truncatechars:160 }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% include "merchant/_pagination.html" with page=page param="page" %}
+
+        {% else %}
+        <div class="empty-state">
+          <p>No log entries match your filters.</p>
+        </div>
+        {% endif %}
+      </div>
+
+      <div>
+        <div class="side-card">
+          <h3>Error Batches ({{ error_batches|length }})</h3>
+          {% if error_batches %}
+          <ul class="side-list">
+            {% for b in error_batches %}
+            <li class="err-item">
+              <strong>{{ b.month }} {{ b.year }} — {{ b.generated_by }}</strong>
+              <small>{{ b.created_at|date:"Y-m-d H:i" }}</small>
+              <div style="font-size:.72rem;margin-top:3px">{{ b.error_message|truncatechars:120 }}</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p style="color:var(--text-muted);font-size:.78rem">No errored batches.</p>
+          {% endif %}
+        </div>
+
+        <div class="side-card">
+          <h3>Log Files</h3>
+          {% if log_files %}
+          <ul class="side-list">
+            {% for f in log_files %}
+            <li class="log-file">
+              <a href="{% url 'admin_download_log' f.name %}">&darr; {{ f.name }}</a>
+              <span>{{ f.size_kb }} KB</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p style="color:var(--text-muted);font-size:.78rem">No log files on disk.</p>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+</body>
+</html>
