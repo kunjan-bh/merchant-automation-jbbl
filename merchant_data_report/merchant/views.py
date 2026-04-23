@@ -1797,16 +1797,11 @@ def _check_payment_detail_missing(uid):
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
 
-        needs_gender = is_empty(row.get('gender'))
-
-        if needs_gender:
-            missing_dict[acc] = {
-                'account_number': acc,
-                'is_nepalpay': acc in np_payment_accs,
-                'address_1': str(row.get('address_1') or ''),
-                'address_3': str(row.get('address_3') or ''),
-                'needs_gender': needs_gender,
-            }
+        # Gender: if empty/null or not F/M, default to 'company' — no manual review needed
+        gender = row.get('gender') or 'company'
+        if str(gender).upper() not in ('F', 'M'):
+            gender = 'company'
+        # No accounts go to manual review anymore — all have gender defaults
 
     return missing_dict
 
@@ -1869,7 +1864,7 @@ def _run_pipeline(file_path, uid):
             _set_progress(uid, 6, 'active', f'Mobile Banking & Connect IPS users processed. (Discarded {user_stats["total_invalid"]} invalid accounts)', extra={'log': discard_msg})
 
         # Step 7: Pre-enrich payment-detail accounts + check for missing CBS data
-        _set_progress(uid, 7, 'active', 'Validating payment detail geo & gender data via CBS...')
+        _set_progress(uid, 7, 'active', 'Validating payment detail gender data via CBS...')
         pay_missing = _check_payment_detail_missing(uid)
 
         if pay_missing:
@@ -1877,7 +1872,7 @@ def _run_pipeline(file_path, uid):
                 uid, 7, 'action_required',
                 f'Found {len(pay_missing)} payment-detail accounts still missing CBS data',
                 extra={**result_info,
-                       'log': f'{len(pay_missing)} accounts need Province/District/Municipality/Gender. Proceed to skip nulls or resolve manually.'},
+                       'log': f'{len(pay_missing)} accounts need Gender. Proceed to skip nulls or resolve manually.'},
             )
             return
 
@@ -2088,12 +2083,12 @@ def api_finalize(request, unique_id):
                     _set_progress(unique_id, 6, 'active', f'Mobile Banking & Connect IPS users processed. (Discarded {user_stats["total_invalid"]} invalid accounts)', extra={'log': discard_msg})
 
             # Step 7: Payment detail geo check
-            _set_progress(unique_id, 7, 'active', 'Validating payment detail geo & gender data via CBS...')
+            _set_progress(unique_id, 7, 'active', 'Validating payment detail gender data via CBS...')
             pay_missing = _check_payment_detail_missing(unique_id)
             if pay_missing and not skip_review:
                 _set_progress(unique_id, 7, 'action_required',
                     f'Found {len(pay_missing)} payment-detail accounts still missing CBS data',
-                    extra={'log': f'{len(pay_missing)} accounts need Province/District/Municipality/Gender. Proceed to skip nulls or resolve manually.'})
+                    extra={'log': f'{len(pay_missing)} accounts need Gender. Proceed to skip nulls or resolve manually.'})
                 return
 
             # Step 8: Generate final report
