@@ -26,11 +26,11 @@ def is_empty(val):
     return pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'null'
 
 def is_valid_account_number(acc):
-    """Valid account: all digits, between 19-20 characters. Rejects names, phone numbers, invalid length, etc."""
+    """Valid account: all digits, exactly 20 characters. Rejects names, phone numbers, invalid length, etc."""
     if not acc:
         return False
     s = str(acc).strip()
-    return s.isdigit() and 19 <= len(s) <= 20
+    return s.isdigit() and len(s) == 20
 
 def filter_dataframe(df, requested_cols):
     cols_to_keep = []
