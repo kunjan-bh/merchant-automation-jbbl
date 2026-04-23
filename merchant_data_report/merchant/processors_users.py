@@ -238,14 +238,20 @@ def enrich_users(rows, auto_seed=True):
 
 
 def collect_missing(rows):
-    """Rows we couldn't fully resolve — these need the users-review page."""
+    """Rows we couldn't fully resolve — these need the users-review page.
+
+    With apply_null_defaults(), all rows should have complete data.
+    This function is now defensive — accounts should rarely/never appear here.
+    """
     missing = []
     for idx, r in enumerate(rows):
         if not r['account']:
-            continue  # rows with no account at all can't be reviewed
-        needs_cc = not r['country_code']
-        needs_g = not r['gender']
-        needs_dob = not r['dob']
+            continue
+        # After apply_null_defaults(), these should never be missing
+        # But check anyway as safety net
+        needs_cc = not r.get('country_code')
+        needs_g = not r.get('gender')
+        needs_dob = not r.get('dob')
         if needs_cc or needs_g or needs_dob:
             missing.append({
                 'idx': idx,
@@ -254,9 +260,9 @@ def collect_missing(rows):
                 'needs_country_code': needs_cc,
                 'needs_gender': needs_g,
                 'needs_dob': needs_dob,
-                'country_code': r['country_code'] or '',
-                'gender': r['gender'] or '',
-                'dob': r['dob'].isoformat() if r['dob'] else '',
+                'country_code': r.get('country_code') or '',
+                'gender': r.get('gender') or '',
+                'dob': r['dob'].isoformat() if r.get('dob') else '',
             })
     return missing
 

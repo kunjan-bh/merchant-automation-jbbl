@@ -551,9 +551,19 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         if invalid_rows > 0:
             _set_progress(uid, 1, 'active', f'Identified {invalid_rows} rows ({invalid_acc_count} unique accounts) with invalid format.', extra={'log': f'Found {invalid_rows} invalid rows across {invalid_acc_count} merchants.'})
 
-    # Rebuild account sets after filtering
-    fonepay_accs = set(fonepay_df[fonepay_acc_col].dropna().astype(str).tolist()) if fonepay_acc_col else set()
-    nepalpay_accs = set(nepalpay_df[nepalpay_acc_col].dropna().astype(str).tolist()) if nepalpay_acc_col else set()
+    # Rebuild account sets after filtering — EXCLUDE invalid accounts
+    if fonepay_acc_col:
+        valid_fp = fonepay_df[~fonepay_df.get('_invalid_format', False)] if '_invalid_format' in fonepay_df.columns else fonepay_df
+        fonepay_accs = set(valid_fp[fonepay_acc_col].dropna().astype(str).tolist())
+    else:
+        fonepay_accs = set()
+
+    if nepalpay_acc_col:
+        valid_np = nepalpay_df[~nepalpay_df.get('_invalid_format', False)] if '_invalid_format' in nepalpay_df.columns else nepalpay_df
+        nepalpay_accs = set(valid_np[nepalpay_acc_col].dropna().astype(str).tolist())
+    else:
+        nepalpay_accs = set()
+
     all_accounts = fonepay_accs | nepalpay_accs
 
     source_null_province = set()
