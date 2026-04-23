@@ -261,6 +261,24 @@ def collect_missing(rows):
     return missing
 
 
+def apply_null_defaults(rows):
+    """Apply defaults for null enrichment fields: gender→company, country_code→01, dob→under_18."""
+    from datetime import date, timedelta
+    today = date.today()
+    under_18_cutoff = today - timedelta(days=18*365.25)
+
+    for r in rows:
+        if not r['account']:
+            continue
+        if not r['gender']:
+            r['gender'] = 'company'
+        if not r['country_code']:
+            r['country_code'] = '01'
+        if not r['dob']:
+            r['dob'] = under_18_cutoff
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
@@ -503,6 +521,7 @@ def run_enrichment(uid, auto_seed=True):
     ips, ips_invalid = extract_ips_rows(ips_path(uid))
     rows = mb + ips
     enrich_users(rows, auto_seed=auto_seed)
+    apply_null_defaults(rows)
     save_rows(uid, rows)
     missing = collect_missing(rows)
     stats = {
