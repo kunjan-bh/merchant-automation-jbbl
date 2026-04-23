@@ -262,7 +262,11 @@ def collect_missing(rows):
 
 
 def apply_null_defaults(rows):
-    """Apply defaults for null enrichment fields: gender→company, country_code→01, dob→under_18."""
+    """Apply defaults for null/invalid enrichment fields:
+    - gender: if not 'F' or 'M', set to 'company'
+    - country_code: if empty/null, set to '01'
+    - dob: if empty/null, set to ~18 years ago (under 18 bracket)
+    """
     from datetime import date, timedelta
     today = date.today()
     under_18_cutoff = today - timedelta(days=18*365.25)
@@ -270,7 +274,8 @@ def apply_null_defaults(rows):
     for r in rows:
         if not r['account']:
             continue
-        if not r['gender']:
+        # Gender: only accept F or M, else company
+        if not r['gender'] or r['gender'].upper() not in ('F', 'M'):
             r['gender'] = 'company'
         if not r['country_code']:
             r['country_code'] = '01'

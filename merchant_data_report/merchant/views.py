@@ -1797,20 +1797,14 @@ def _check_payment_detail_missing(uid):
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
 
-        needs_province     = is_empty(row.get('province')) or map_province(row.get('province')) == 'Unmatched'
-        needs_district     = is_empty(row.get('district')) or map_district(row.get('district')) == 'Unmatched'
-        needs_municipality = is_empty(row.get('municipality')) or map_local(row.get('municipality')) == 'Unmatched'
-        needs_gender       = is_empty(row.get('gender'))
+        needs_gender = is_empty(row.get('gender'))
 
-        if any([needs_province, needs_district, needs_municipality, needs_gender]):
+        if needs_gender:
             missing_dict[acc] = {
                 'account_number': acc,
                 'is_nepalpay': acc in np_payment_accs,
                 'address_1': str(row.get('address_1') or ''),
                 'address_3': str(row.get('address_3') or ''),
-                'needs_province': needs_province,
-                'needs_district': needs_district,
-                'needs_municipality': needs_municipality,
                 'needs_gender': needs_gender,
             }
 
