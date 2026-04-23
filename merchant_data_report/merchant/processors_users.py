@@ -85,16 +85,16 @@ def extract_mb_rows(path):
     invalid_count = 0
     for acc_raw in df[acc_col].tolist():
         normalized_acc = _normalize_account(acc_raw)
-        if normalized_acc and not is_valid_account_number(normalized_acc):
+        if not normalized_acc or not is_valid_account_number(normalized_acc):
             invalid_count += 1
-            continue  # Skip invalid accounts
+            continue  # Skip invalid or empty accounts
         rows.append({
             'source': 'MB',
             'account': normalized_acc,
             'gender': None,
             'country_code': None,
             'dob': None,
-            '_invalid_format': False if normalized_acc and is_valid_account_number(normalized_acc) else True,
+            '_invalid_format': False,
         })
     if invalid_count > 0:
         print(f'[MB] Discarded {invalid_count} rows with invalid account numbers')
@@ -116,9 +116,9 @@ def extract_ips_rows(path):
     invalid_count = 0
     for _, r in df.iterrows():
         normalized_acc = _normalize_account(r.get(acc_col))
-        if normalized_acc and not is_valid_account_number(normalized_acc):
+        if not normalized_acc or not is_valid_account_number(normalized_acc):
             invalid_count += 1
-            continue  # Skip invalid accounts
+            continue  # Skip invalid or empty accounts
         g = r.get(gender_col) if gender_col else None
         if g is not None and (isinstance(g, float) and pd.isna(g)):
             g = None
@@ -130,7 +130,7 @@ def extract_ips_rows(path):
             'gender': (str(g).strip() if g is not None else None),
             'country_code': None,
             'dob': None,
-            '_invalid_format': False if normalized_acc and is_valid_account_number(normalized_acc) else True,
+            '_invalid_format': False,
         })
     if invalid_count > 0:
         print(f'[IPS] Discarded {invalid_count} rows with invalid account numbers')
