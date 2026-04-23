@@ -72,32 +72,53 @@ def _read_excel(path):
 
 
 def extract_mb_rows(path):
-    """Mobile Banking — needs ACCOUNT_NUMBER. File supplies no user attributes."""
+    """Mobile Banking — needs ACCOUNT_NUMBER. File supplies no user attributes.
+    Filters out invalid account numbers (not 19-20 digits).
+    """
+    from .views import is_valid_account_number
+
     df = _read_excel(path)
     acc_col = _find_col(df, 'account', 'number') or _find_col(df, 'account')
     if acc_col is None:
         raise ValueError("Mobile Banking file has no account number column")
     rows = []
+    invalid_count = 0
     for acc_raw in df[acc_col].tolist():
+        normalized_acc = _normalize_account(acc_raw)
+        if normalized_acc and not is_valid_account_number(normalized_acc):
+            invalid_count += 1
+            continue  # Skip invalid accounts
         rows.append({
             'source': 'MB',
-            'account': _normalize_account(acc_raw),
+            'account': normalized_acc,
             'gender': None,
             'country_code': None,
             'dob': None,
+            '_invalid_format': False if normalized_acc and is_valid_account_number(normalized_acc) else True,
         })
-    return rows
+    if invalid_count > 0:
+        print(f'[MB] Discarded {invalid_count} rows with invalid account numbers')
+    return rows, invalid_count
 
 
 def extract_ips_rows(path):
-    """Connect IPS — account number + file-level Gender (MALE/FEMALE/...)."""
+    """Connect IPS — account number + file-level Gender (MALE/FEMALE/...).
+    Filters out invalid account numbers (not 19-20 digits).
+    """
+    from .views import is_valid_account_number
+
     df = _read_excel(path)
     acc_col = _find_col(df, 'account', 'number') or _find_col(df, 'account')
     if acc_col is None:
         raise ValueError("Connect IPS file has no account number column")
     gender_col = _find_col(df, 'gender')
     rows = []
+    invalid_count = 0
     for _, r in df.iterrows():
+        normalized_acc = _normalize_account(r.get(acc_col))
+        if normalized_acc and not is_valid_account_number(normalized_acc):
+            invalid_count += 1
+            continue  # Skip invalid accounts
         g = r.get(gender_col) if gender_col else None
         if g is not None and (isinstance(g, float) and pd.isna(g)):
             g = None
@@ -105,12 +126,15 @@ def extract_ips_rows(path):
             g = None
         rows.append({
             'source': 'IPS',
-            'account': _normalize_account(r.get(acc_col)),
+            'account': normalized_acc,
             'gender': (str(g).strip() if g is not None else None),
             'country_code': None,
             'dob': None,
+            '_invalid_format': False if normalized_acc and is_valid_account_number(normalized_acc) else True,
         })
-    return rows
+    if invalid_count > 0:
+        print(f'[IPS] Discarded {invalid_count} rows with invalid account numbers')
+    return rows, invalid_count
 
 
 # ---------------------------------------------------------------------------
@@ -470,14 +494,24 @@ def ips_path(uid):
 
 
 def run_enrichment(uid, auto_seed=True):
-    """Read both files, enrich via CBS, persist rows, return (missing, rows)."""
-    mb = extract_mb_rows(mb_path(uid))
-    ips = extract_ips_rows(ips_path(uid))
+    """Read both files, enrich via CBS, persist rows, return (missing, rows, stats).
+
+    Returns:
+        (missing_records, rows, stats_dict) where stats includes invalid_mb_count, invalid_ips_count
+    """
+    mb, mb_invalid = extract_mb_rows(mb_path(uid))
+    ips, ips_invalid = extract_ips_rows(ips_path(uid))
     rows = mb + ips
     enrich_users(rows, auto_seed=auto_seed)
     save_rows(uid, rows)
     missing = collect_missing(rows)
-    return missing, rows
+    stats = {
+        'invalid_mb_count': mb_invalid,
+        'invalid_ips_count': ips_invalid,
+        'total_invalid': mb_invalid + ips_invalid,
+        'total_processed': len(rows),
+    }
+    return missing, rows, stats
 
 
 def write_sheet_11_from_uid(writer, uid):

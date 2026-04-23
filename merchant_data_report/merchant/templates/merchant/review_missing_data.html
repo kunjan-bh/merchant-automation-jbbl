@@ -598,7 +598,7 @@ function proceedWithoutUpdates() {
     showNavOverlay('Skipping manual updates…', 'Returning to the dashboard.');
     // Fire the finalize job then immediately return to the dashboard.
     // The dashboard's overlay animation picks up where this left off.
-    fetch('/api/finalize/{{ unique_id }}/')
+    fetch('/api/finalize/{{ unique_id }}/?skip_review=1')
         .finally(() => {
             window.location.href = '/dashboard/?resume={{ unique_id }}';
         });

@@ -689,6 +689,26 @@
           })
           .catch(err => { showError('Failed: ' + err); form.style.display = ''; timeline.classList.remove('show'); });
       });
+
+      // Resume mode: returned here from a review page after applying mappings
+      const _resumeUid = new URLSearchParams(window.location.search).get('resume');
+      const _doneThrough = parseInt(new URLSearchParams(window.location.search).get('done') || '5');
+      if (_resumeUid) {
+        uid = _resumeUid;
+        isProcessing = true;
+        open();
+        form.style.display = 'none';
+        timeline.classList.add('show');
+        buildTimeline();
+        // Mark already-completed steps as done
+        for (let i = 1; i <= _doneThrough; i++) setStep(i, 'done');
+        // Continue pipeline from the next step
+        fetch('/api/finalize/' + uid + '/')
+          .then(r => r.json())
+          .then(() => { pollTimer = setInterval(pollProgress, 800); })
+          .catch(() => { pollTimer = setInterval(pollProgress, 800); });
+        history.replaceState(null, '', '/dashboard/');
+      }
     })();
   </script>
 </body>

@@ -26,11 +26,11 @@ def is_empty(val):
     return pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'null'
 
 def is_valid_account_number(acc):
-    """Valid CBS account: all digits, at least 15 characters. Rejects names, phone numbers, etc."""
+    """Valid account: all digits, between 19-20 characters. Rejects names, phone numbers, invalid length, etc."""
     if not acc:
         return False
     s = str(acc).strip()
-    return s.isdigit() and len(s) >= 15
+    return s.isdigit() and 19 <= len(s) <= 20
 
 def filter_dataframe(df, requested_cols):
     cols_to_keep = []
@@ -1855,17 +1855,24 @@ def _run_pipeline(file_path, uid):
         # Merchant data clean → now process MB + Connect IPS for sheet 11
         _set_progress(uid, 6, 'active', 'Enriching Mobile Banking & Connect IPS users via CBS...')
         from .processors_users import run_enrichment
-        users_missing, _ = run_enrichment(uid, auto_seed=True)
+        users_missing, _, user_stats = run_enrichment(uid, auto_seed=True)
+
+        discard_msg = ''
+        if user_stats.get('total_invalid', 0) > 0:
+            discard_msg = f" (Discarded {user_stats['total_invalid']} invalid accounts: {user_stats.get('invalid_mb_count', 0)} MB, {user_stats.get('invalid_ips_count', 0)} IPS)"
 
         if users_missing:
             _set_progress(
                 uid, 6, 'action_required',
                 f'Found {len(users_missing)} user records missing CBS attributes',
                 extra={**result_info,
-                       'log': f'Need manual review for {len(users_missing)} MB/IPS rows (country_code/gender/DOB).',
-                       'users_missing_count': len(users_missing)},
+                       'log': f'Need manual review for {len(users_missing)} MB/IPS rows (country_code/gender/DOB).{discard_msg}',
+                       'users_missing_count': len(users_missing),
+                       'invalid_users': user_stats.get('total_invalid', 0)},
             )
             return
+        elif user_stats.get('total_invalid', 0) > 0:
+            _set_progress(uid, 6, 'active', f'Mobile Banking & Connect IPS users processed. (Discarded {user_stats["total_invalid"]} invalid accounts)', extra={'log': discard_msg})
 
         # Step 7: Pre-enrich payment-detail accounts + check for missing CBS data
         _set_progress(uid, 7, 'active', 'Validating payment detail geo & gender data via CBS...')
@@ -2053,10 +2060,50 @@ def api_progress(request, unique_id):
 
 @login_required_custom
 def api_finalize(request, unique_id):
-    """Start final report generation in a background thread; caller polls api_progress for completion."""
-    _set_progress(unique_id, 8, 'active', 'Generating final report...')
+    """Resume pipeline from step 6 onwards; runs in background, caller polls for progress.
+
+    Pass ?skip_review=1 to bypass steps 6/7 action_required prompts and generate directly
+    (used by 'Cancel & Proceed Without Updates' on review pages).
+    """
+    skip_review = request.GET.get('skip_review') == '1'
+
     def _run():
         try:
+            from .processors_users import run_enrichment, load_rows, collect_missing
+
+            # Step 6: Users enrichment
+            _set_progress(unique_id, 6, 'active', 'Enriching Mobile Banking & Connect IPS users via CBS...')
+            existing_rows = load_rows(unique_id)
+            if existing_rows is not None and not collect_missing(existing_rows):
+                pass  # already resolved in a previous review pass
+            else:
+                users_missing, _, user_stats = run_enrichment(unique_id, auto_seed=True)
+
+                discard_msg = ''
+                if user_stats.get('total_invalid', 0) > 0:
+                    discard_msg = f" (Discarded {user_stats['total_invalid']} invalid accounts: {user_stats.get('invalid_mb_count', 0)} MB, {user_stats.get('invalid_ips_count', 0)} IPS)"
+
+                if users_missing and not skip_review:
+                    _set_progress(unique_id, 6, 'action_required',
+                        f'Found {len(users_missing)} user records missing CBS attributes',
+                        extra={'log': f'Need manual review for {len(users_missing)} MB/IPS rows (country_code/gender/DOB).{discard_msg}',
+                               'users_missing_count': len(users_missing),
+                               'invalid_users': user_stats.get('total_invalid', 0)})
+                    return
+                elif user_stats.get('total_invalid', 0) > 0:
+                    _set_progress(unique_id, 6, 'active', f'Mobile Banking & Connect IPS users processed. (Discarded {user_stats["total_invalid"]} invalid accounts)', extra={'log': discard_msg})
+
+            # Step 7: Payment detail geo check
+            _set_progress(unique_id, 7, 'active', 'Validating payment detail geo & gender data via CBS...')
+            pay_missing = _check_payment_detail_missing(unique_id)
+            if pay_missing and not skip_review:
+                _set_progress(unique_id, 7, 'action_required',
+                    f'Found {len(pay_missing)} payment-detail accounts still missing CBS data',
+                    extra={'log': f'{len(pay_missing)} accounts need Province/District/Municipality/Gender. Proceed to skip nulls or resolve manually.'})
+                return
+
+            # Step 8: Generate final report
+            _set_progress(unique_id, 8, 'active', 'Generating final report...')
             report = _generate_final_report(unique_id)
             _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
                 'unique_id': unique_id,
@@ -2704,21 +2751,8 @@ def apply_manual_mapping(request, unique_id):
             # Else: We do NOT delete the existing record anymore. We just don't update it to CleanCBS 
             # if it's still missing pieces. This prevents loss of work (like gender fills).
 
-        # Generate final report synchronously to prevent race conditions during download
-        _set_progress(unique_id, 8, 'active', 'Generating final report...')
-        try:
-            report = _generate_final_report(unique_id)
-            _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
-                'unique_id': unique_id,
-                'step3_filename': report['step3_filename'],
-            })
-        except Exception as e:
-            _set_progress(unique_id, -1, 'error', str(e))
-            _mark_batch_errored(unique_id, str(e))
-            messages.error(request, f"Error generating report: {e}")
-            return redirect('dashboard')
-            
-        return redirect('finalize_report', unique_id=unique_id)
+        # Mappings saved — return to dashboard modal to continue steps 6, 7, 8
+        return redirect(f'/dashboard/?resume={unique_id}&done=5')
 
 @login_required_custom
 def finalize_report(request, unique_id):
@@ -2867,14 +2901,8 @@ def users_apply(request, unique_id):
         messages.warning(request, f'{len(still_missing)} record(s) still incomplete — please fill all fields.')
         return redirect('users_review', unique_id=unique_id)
 
-    messages.success(request, 'Manual user data applied. Generating final report...')
-    # Kick the final report generation now that sheet-11 data is complete.
-    _generate_final_report(unique_id)
-    _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
-        'unique_id': unique_id,
-        'step3_filename': f'Additional_Payment_Report_ASCII_{unique_id}.xlsx',
-    })
-    return redirect('finalize_report', unique_id=unique_id)
+    # User data saved — return to dashboard modal to continue steps 7 and 8
+    return redirect(f'/dashboard/?resume={unique_id}&done=6')
 
 
 # --- Payment Detail Missing Data Review ---
@@ -2953,10 +2981,5 @@ def payment_detail_apply(request, unique_id):
                     if k in ('province', 'district', 'municipality')
                 })
 
-    # Generate the final report now (skipped/empty gender → Company; skipped geo fields → excluded from geo totals)
-    report = _generate_final_report(unique_id)
-    _set_progress(unique_id, 8, 'complete', 'Report compiled successfully', extra={
-        'unique_id': unique_id,
-        'step3_filename': report['step3_filename'],
-    })
-    return redirect('finalize_report', unique_id=unique_id)
+    # Payment data saved — return to dashboard modal to generate final report (step 8)
+    return redirect(f'/dashboard/?resume={unique_id}&done=7')

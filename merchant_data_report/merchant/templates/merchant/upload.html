@@ -575,19 +575,26 @@
     const goBtn = document.getElementById('goBtn');
     let uid = null, pollTimer = null;
 
-    // Resume mode: arrived here from the review page after clicking "Cancel & Proceed"
+    // Resume mode: arrived here from a review page after applying/cancelling
     const _resumeUid = new URLSearchParams(window.location.search).get('resume');
+    const _doneThrough = parseInt(new URLSearchParams(window.location.search).get('done') || '7');
     if (_resumeUid) {
         uid = _resumeUid;
+        // Hide the upload form — files are already uploaded, no need to show them
+        const sidebar = document.querySelector('.sidebar');
+        if (sidebar) sidebar.style.display = 'none';
         document.getElementById('idleState').style.display = 'none';
         document.getElementById('timelineContainer').classList.add('show');
         initTimeline();
-        // Mark steps 1-7 as done, step 8 as active immediately
-        for (let i = 1; i <= 7; i++) setStepState(i, 'done');
-        setStepState(8, 'active', 'Generating final report…');
-        pollTimer = setInterval(pollProgress, 800);
-        // Clean URL without reloading so the back button works
-        history.replaceState(null, '', '/');
+        // Mark only the steps that are already complete
+        for (let i = 1; i <= _doneThrough; i++) setStepState(i, 'done');
+        // Trigger api_finalize to continue the pipeline from the next step
+        fetch('/api/finalize/' + uid + '/')
+            .then(r => r.json())
+            .then(() => { pollTimer = setInterval(pollProgress, 800); })
+            .catch(() => { pollTimer = setInterval(pollProgress, 800); });
+        // Clean URL without reloading
+        history.replaceState(null, '', '/upload/');
     }
 
     if (form) {
@@ -700,7 +707,7 @@
 
                     setTimeout(() => {
                         setStepState(TOTAL_STEPS, 'active');
-                        fetch('/api/finalize/' + uid + '/')
+                        fetch('/api/finalize/' + uid + '/?skip_review=1')
                             .then(r => r.json())
                             .then(res => {
                                 if (res.status === 'error') { alert('Error: ' + res.detail); return; }
