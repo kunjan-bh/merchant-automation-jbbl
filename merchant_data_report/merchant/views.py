@@ -553,13 +553,19 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
 
     # Rebuild account sets after filtering — EXCLUDE invalid accounts
     if fonepay_acc_col:
-        valid_fp = fonepay_df[~fonepay_df.get('_invalid_format', False)] if '_invalid_format' in fonepay_df.columns else fonepay_df
+        if '_invalid_format' in fonepay_df.columns:
+            valid_fp = fonepay_df[~fonepay_df['_invalid_format']]
+        else:
+            valid_fp = fonepay_df
         fonepay_accs = set(valid_fp[fonepay_acc_col].dropna().astype(str).tolist())
     else:
         fonepay_accs = set()
 
     if nepalpay_acc_col:
-        valid_np = nepalpay_df[~nepalpay_df.get('_invalid_format', False)] if '_invalid_format' in nepalpay_df.columns else nepalpay_df
+        if '_invalid_format' in nepalpay_df.columns:
+            valid_np = nepalpay_df[~nepalpay_df['_invalid_format']]
+        else:
+            valid_np = nepalpay_df
         nepalpay_accs = set(valid_np[nepalpay_acc_col].dropna().astype(str).tolist())
     else:
         nepalpay_accs = set()
@@ -1914,6 +1920,16 @@ def _mark_batch_completed(uid, result_info):
         batch.merged_cbs_count      = int(result_info.get('merged_cbs_count',      0) or 0)
         batch.final_report_filename = result_info.get('step3_filename', '') or ''
         batch.save()
+
+        # Log batch completion to activity
+        ActivityLog.objects.create(
+            username=batch.generated_by,
+            full_name=batch.generated_by_name,
+            level='INFO',
+            action='GENERATE_SUCCESS',
+            detail=f'Batch {uid} completed. Report: {batch.final_report_filename}',
+            batch=batch
+        )
     except Exception as e:
         print(f'[_mark_batch_completed] {e}')
 
