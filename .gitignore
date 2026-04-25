@@ -1,6 +1,38 @@
-venv
-merchant_data_report/venv
-~$*.xlsx
-merchant_data_report/db.sqlite3
-merchant_data_report/media
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# Django
+*.sqlite3
+local_settings.py
+/staticfiles/
+media/
+
+# Logs
+*.log
+*.log.*
+logs/
+server.log
+
+# Environment
 .env
+.env.*
+venv/
+env/
+merchant_data_report/venv
+
+# OS / Editor
+~$*.xlsx
+~$*.xls
+*.tmp
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Scratch/test scripts not part of the app
+scratch_*.py
+run_uid.py
+scratch_test_excel*.py
