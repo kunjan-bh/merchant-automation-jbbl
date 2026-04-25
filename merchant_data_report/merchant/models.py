@@ -1,5 +1,8 @@
 from django.db import models
+from django.contrib.auth.hashers import make_password, check_password as django_check_password
 import os
+import secrets
+import string
 
 
 class ReportBatch(models.Model):
@@ -93,6 +96,12 @@ class UserActivityLog(models.Model):
         ('DOWNLOAD',         'Download'),
         ('VERIFY',           'Verified Report'),
         ('UNVERIFY',         'Unverified Report'),
+        ('USER_CREATE',      'User Created'),
+        ('USER_ROLE_CHANGE', 'User Role Changed'),
+        ('USER_DEACTIVATE',  'User Deactivated'),
+        ('USER_ACTIVATE',    'User Activated'),
+        ('PASSWORD_RESET',   'Password Reset'),
+        ('PASSWORD_CHANGE',  'Password Changed'),
     ]
 
     timestamp  = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -114,6 +123,35 @@ class UserActivityLog(models.Model):
 
     def __str__(self):
         return f'[{self.timestamp:%Y-%m-%d %H:%M:%S}] {self.username} — {self.action}'
+
+
+class SystemUser(models.Model):
+    """System user account for application access."""
+    username   = models.CharField(max_length=100, unique=True, db_index=True)
+    email      = models.EmailField(blank=True)
+    full_name  = models.CharField(max_length=200, blank=True)
+    password   = models.CharField(max_length=255)
+    is_admin   = models.BooleanField(default=False)
+    is_active  = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def set_password(self, raw_password):
+        self.password = make_password(raw_password)
+
+    def check_password(self, raw_password):
+        return django_check_password(raw_password, self.password)
+
+    @staticmethod
+    def generate_password(length=12):
+        return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
+
+    class Meta:
+        ordering = ['username']
+        verbose_name = 'System User'
+        verbose_name_plural = 'System Users'
+
+    def __str__(self):
+        return f'{self.username} ({self.full_name})'
 
 
 class CBSMerchant(models.Model):

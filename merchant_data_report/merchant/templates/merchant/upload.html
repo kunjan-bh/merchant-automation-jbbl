@@ -79,8 +79,8 @@
             font-size: 0.95rem; font-weight: 500; cursor: pointer; transition: all 0.2s;
             font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px;
         }
-        .btn-go:hover { background: var(--blue-hover); box-shadow: 0 4px 12px rgba(27, 92, 153, 0.2); }
-        .btn-go:disabled { opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+        .btn-go:hover:not(:disabled) { background: var(--blue-hover); box-shadow: 0 4px 12px rgba(27, 92, 153, 0.2); }
+        .btn-go:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; background: #d1d5db; color: #6b7280; }
 
         .msg-container { margin-bottom: 1rem; }
         .msg { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 500; display:flex; gap:8px; align-items:flex-start;}
@@ -275,6 +275,12 @@
         }
         .meta-group input:focus, .meta-group select:focus { border-color: var(--blue); }
         .meta-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+
+        /* ── File Validation Messages ── */
+        .file-error { font-size: 0.8rem; color: #dc2626; margin-top: 0.3rem; padding: 0.4rem 0.6rem; background: #fee2e2; border: 1px solid #fecaca; border-radius: 4px; display: none; }
+        .file-error.show { display: block; }
+        .file-status { font-size: 0.8rem; color: #059669; margin-top: 0.3rem; padding: 0.4rem 0.6rem; background: #d1fae5; border: 1px solid #a7f3d0; border-radius: 4px; display: none; }
+        .file-status.show { display: block; }
     </style>
 </head>
 <body>
@@ -306,31 +312,45 @@
             {% csrf_token %}
             <div class="file-group">
                 <label>Total Merchant file (FonePay + NepalPay)</label>
-                <input type="file" name="file" id="fileInput" accept=".xlsx,.xls" required>
+                <input type="file" name="file" id="fileInput" accept=".xlsx,.xls" required data-file-type="total_merchant">
+                <div class="file-error" id="fileInputError"></div>
+                <div class="file-status" id="fileInputStatus"></div>
             </div>
             <div class="file-group">
                 <label>Card Data</label>
-                <input type="file" name="card_data" id="cardDataInput" accept=".xlsx,.xls" required>
+                <input type="file" name="card_data" id="cardDataInput" accept=".xlsx,.xls" required data-file-type="card_data">
+                <div class="file-error" id="cardDataInputError"></div>
+                <div class="file-status" id="cardDataInputStatus"></div>
             </div>
             <div class="file-group">
                 <label>FonePay Payment Details</label>
-                <input type="file" name="phonepay_details" id="phonepayDetailsInput" accept=".xlsx,.xls" required>
+                <input type="file" name="phonepay_details" id="phonepayDetailsInput" accept=".xlsx,.xls" required data-file-type="phonepay">
+                <div class="file-error" id="phonepayDetailsInputError"></div>
+                <div class="file-status" id="phonepayDetailsInputStatus"></div>
             </div>
             <div class="file-group">
                 <label>NepalPay Payment Details</label>
-                <input type="file" name="nepalpay_details" id="nepalpayDetailsInput" accept=".xlsx,.xls" required>
+                <input type="file" name="nepalpay_details" id="nepalpayDetailsInput" accept=".xlsx,.xls" required data-file-type="nepalpay">
+                <div class="file-error" id="nepalpayDetailsInputError"></div>
+                <div class="file-status" id="nepalpayDetailsInputStatus"></div>
             </div>
             <div class="file-group">
                 <label>Cardless Report</label>
-                <input type="file" name="cardless_report" id="cardlessReportInput" accept=".xlsx,.xls" required>
+                <input type="file" name="cardless_report" id="cardlessReportInput" accept=".xlsx,.xls" required data-file-type="cardless">
+                <div class="file-error" id="cardlessReportInputError"></div>
+                <div class="file-status" id="cardlessReportInputStatus"></div>
             </div>
             <div class="file-group">
                 <label>Mobile Banking Users Data</label>
-                <input type="file" name="mobile_banking" id="mobileBankingInput" accept=".xlsx,.xls,.csv" required>
+                <input type="file" name="mobile_banking" id="mobileBankingInput" accept=".xlsx,.xls,.csv" required data-file-type="mobile_banking">
+                <div class="file-error" id="mobileBankingInputError"></div>
+                <div class="file-status" id="mobileBankingInputStatus"></div>
             </div>
             <div class="file-group">
                 <label>Connect IPS Users Data</label>
-                <input type="file" name="connect_ips" id="connectIpsInput" accept=".xlsx,.xls,.csv" required>
+                <input type="file" name="connect_ips" id="connectIpsInput" accept=".xlsx,.xls,.csv" required data-file-type="connect_ips">
+                <div class="file-error" id="connectIpsInputError"></div>
+                <div class="file-status" id="connectIpsInputStatus"></div>
             </div>
 
             <!-- Report Meta -->
@@ -570,10 +590,184 @@
         }
     }
 
+    // --- File Validation ---
+    const fileConfigs = {
+        'fileInput': { type: 'total_merchant', name: 'Total Merchant file', requiredSheets: ['fonepay', 'nepalpay'] },
+        'cardDataInput': { type: 'card_data', name: 'Card Data' },
+        'phonepayDetailsInput': { type: 'phonepay', name: 'FonePay Payment Details' },
+        'nepalpayDetailsInput': { type: 'nepalpay', name: 'NepalPay Payment Details' },
+        'cardlessReportInput': { type: 'cardless', name: 'Cardless Report' },
+        'mobileBankingInput': { type: 'mobile_banking', name: 'Mobile Banking Users Data' },
+        'connectIpsInput': { type: 'connect_ips', name: 'Connect IPS Users Data' }
+    };
+
+    const validationState = {
+        'fileInput': null,
+        'cardDataInput': null,
+        'phonepayDetailsInput': null,
+        'nepalpayDetailsInput': null,
+        'cardlessReportInput': null,
+        'mobileBankingInput': null,
+        'connectIpsInput': null
+    };
+
+    function updateSubmitButton() {
+        const goBtn = document.getElementById('goBtn');
+        const allValid = Object.values(validationState).every(v => v === true);
+        const anyFile = Object.keys(validationState).some(id => {
+            const input = document.getElementById(id);
+            return input && input.files && input.files.length > 0;
+        });
+
+        if (!anyFile) {
+            goBtn.disabled = true;
+            goBtn.textContent = 'Select files to proceed';
+            return;
+        }
+
+        if (allValid) {
+            goBtn.disabled = false;
+            goBtn.innerHTML = 'Proceed <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>';
+        } else {
+            goBtn.disabled = true;
+            goBtn.textContent = 'Fix validation errors above';
+        }
+    }
+
+    async function validateFile(inputElement) {
+        const inputId = inputElement.id;
+        const file = inputElement.files[0];
+        const errorDiv = document.getElementById(inputId + 'Error');
+        const statusDiv = document.getElementById(inputId + 'Status');
+
+        console.log('Validating file:', inputId, file?.name);
+
+        // Clear previous messages
+        if (errorDiv) errorDiv.classList.remove('show');
+        if (errorDiv) errorDiv.textContent = '';
+        if (statusDiv) statusDiv.classList.remove('show');
+        if (statusDiv) statusDiv.textContent = '';
+
+        validationState[inputId] = null; // Reset state
+        updateSubmitButton();
+
+        if (!file) {
+            validationState[inputId] = false;
+            updateSubmitButton();
+            return false;
+        }
+
+        // Basic file size check (max 100MB)
+        if (file.size > 100 * 1024 * 1024) {
+            errorDiv.textContent = '❌ File is too large (max 100MB)';
+            errorDiv.classList.add('show');
+            validationState[inputId] = false;
+            updateSubmitButton();
+            return false;
+        }
+
+        // Check file extension
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+            errorDiv.textContent = '❌ Invalid file format. Only .xlsx, .xls, or .csv allowed.';
+            errorDiv.classList.add('show');
+            validationState[inputId] = false;
+            updateSubmitButton();
+            return false;
+        }
+
+        // Validate on server
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('file_type', inputElement.getAttribute('data-file-type'));
+
+        // Get CSRF token
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+
+        try {
+            if (statusDiv) {
+                statusDiv.textContent = '⏳ Validating file...';
+                statusDiv.classList.add('show');
+            }
+
+            console.log('Sending validation request for:', inputId);
+            const response = await fetch('/api/validate-file/', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': csrfToken
+                }
+            });
+            console.log('Response status:', response.status);
+            const result = await response.json();
+            console.log('Validation result:', result);
+
+            if (!result.valid) {
+                if (errorDiv) {
+                    errorDiv.textContent = '❌ ' + result.error;
+                    errorDiv.classList.add('show');
+                }
+                if (statusDiv) statusDiv.classList.remove('show');
+                validationState[inputId] = false;
+                updateSubmitButton();
+                return false;
+            } else {
+                if (statusDiv) {
+                    statusDiv.textContent = '✓ ' + file.name + ' - File validated successfully';
+                    statusDiv.classList.add('show');
+                }
+                validationState[inputId] = true;
+                updateSubmitButton();
+                return true;
+            }
+        } catch (err) {
+            console.error('Validation error:', err);
+            if (errorDiv) {
+                errorDiv.textContent = '❌ Validation error: ' + err.message;
+                errorDiv.classList.add('show');
+            }
+            validationState[inputId] = false;
+            updateSubmitButton();
+            return false;
+        }
+    }
+
+    // Attach file validation to all file inputs
+    function attachValidationListeners() {
+        console.log('Attaching validation listeners...');
+        Object.keys(fileConfigs).forEach(inputId => {
+            const input = document.getElementById(inputId);
+            console.log('Looking for input:', inputId, input ? 'Found' : 'Not found');
+            if (input) {
+                input.addEventListener('change', function() {
+                    console.log('File changed:', inputId);
+                    validateFile(this);
+                });
+
+                // If file is already selected, validate it
+                if (input.files && input.files.length > 0) {
+                    console.log('File already selected on load:', inputId);
+                    validateFile(input);
+                }
+            }
+        });
+    }
+
+    // Wait for DOM to be ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', attachValidationListeners);
+    } else {
+        attachValidationListeners();
+    }
+
     // --- Processing API logic ---
     const form = document.getElementById('uploadForm');
     const goBtn = document.getElementById('goBtn');
     let uid = null, pollTimer = null;
+
+    // Initialize submit button as disabled
+    goBtn.disabled = true;
+    goBtn.textContent = 'Select files to proceed';
 
     // Resume mode: arrived here from a review page after applying/cancelling
     const _resumeUid = new URLSearchParams(window.location.search).get('resume');
@@ -598,24 +792,31 @@
     }
 
     if (form) {
-        form.addEventListener('submit', function(e) {
+        form.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
-            const fileInput = document.getElementById('fileInput');
-            const cardDataInput = document.getElementById('cardDataInput');
-            const phonepayDetailsInput = document.getElementById('phonepayDetailsInput');
-            const nepalpayDetailsInput = document.getElementById('nepalpayDetailsInput');
-            const cardlessReportInput = document.getElementById('cardlessReportInput');
-            const mobileBankingInput = document.getElementById('mobileBankingInput');
-            const connectIpsInput = document.getElementById('connectIpsInput');
+            console.log('Form submitted, validationState:', validationState);
 
-            if (!fileInput.files.length || !cardDataInput.files.length || !phonepayDetailsInput.files.length
-                || !nepalpayDetailsInput.files.length || !cardlessReportInput.files.length
-                || !mobileBankingInput.files.length || !connectIpsInput.files.length) {
+            // Check if all files are selected
+            const allInputs = Object.keys(fileConfigs).map(id => document.getElementById(id));
+            const allSelected = allInputs.every(input => input && input.files && input.files.length > 0);
+
+            console.log('All files selected:', allSelected);
+
+            if (!allSelected) {
                 alert('Please select all required files.');
                 return;
             }
-            
+
+            // Check if all files have passed validation
+            const allValid = Object.values(validationState).every(v => v === true);
+
+            console.log('All valid:', allValid, 'Validation state:', validationState);
+
+            if (!allValid) {
+                alert('Please fix all file validation errors before proceeding. Each file must pass validation.');
+                return;
+            }
+
             goBtn.disabled = true; 
             goBtn.innerHTML = `<svg class="icon-spinner" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Starting...`;
 

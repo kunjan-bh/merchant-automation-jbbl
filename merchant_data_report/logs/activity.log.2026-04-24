@@ -1,0 +1,14 @@
+[2026-04-24 14:55:22] [INFO   ] [admin               ] [127.0.0.1      ] LOGIN | Logged in from 127.0.0.1
+[2026-04-24 14:55:34] [INFO   ] [admin               ] [127.0.0.1      ] LOGOUT | Session ended
+[2026-04-24 15:14:13] [INFO   ] [admin               ] [127.0.0.1      ] LOGIN | Logged in from 127.0.0.1
+[2026-04-24 15:31:42] [INFO   ] [admin               ] [127.0.0.1      ] LOGOUT | Session ended
+[2026-04-24 15:31:50] [INFO   ] [admin               ] [127.0.0.1      ] LOGIN | Logged in from 127.0.0.1
+[2026-04-24 15:35:01] [INFO   ] [admin               ] [127.0.0.1      ] USER_CREATE | Created user lenovo
+[2026-04-24 15:35:58] [INFO   ] [admin               ] [127.0.0.1      ] USER_ROLE_CHANGE | Set admin role to True for jyotibikash
+[2026-04-24 15:36:04] [INFO   ] [admin               ] [127.0.0.1      ] USER_ROLE_CHANGE | Set admin role to False for jyotibikash
+[2026-04-24 15:36:31] [INFO   ] [admin               ] [127.0.0.1      ] DOWNLOAD | Downloaded log file activity.log.2026-04-23
+[2026-04-24 15:36:51] [INFO   ] [admin               ] [127.0.0.1      ] USER_CREATE | Created user q123
+[2026-04-24 15:37:49] [INFO   ] [admin               ] [127.0.0.1      ] USER_DEACTIVATE | User q123 is now inactive
+[2026-04-24 16:12:22] [INFO   ] [admin               ] [127.0.0.1      ] DOWNLOAD | Downloaded log file activity.log.2026-04-22
+[2026-04-24 22:13:46] [INFO   ] [admin               ] [127.0.0.1      ] LOGIN | Logged in from 127.0.0.1
+[2026-04-24 23:59:44] [INFO   ] [admin               ] [127.0.0.1      ] GENERATE_START | Started generation for Ashwin 2082

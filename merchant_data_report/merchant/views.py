@@ -1184,7 +1184,8 @@ def _generate_final_report(unique_id):
     g_df_pay = create_txns_gender_format(all_payment_df)
     # ---------------------------------------------------
 
-    step3_filename = f'Additional_Payment_Report_ASCII_{unique_id}.xlsx'
+    month_lower = month_name.lower() if month_name else 'unknown'
+    step3_filename = f'Merchant_User_report_{month_lower}_{year_val}.xlsx'
     step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
     
     with pd.ExcelWriter(step3_path, engine='openpyxl') as writer:
@@ -1980,6 +1981,99 @@ def upload_merchant_data(request):
 # --- API VIEWS ---
 
 @login_required_custom
+def api_validate_file(request):
+    """Validate uploaded file to ensure it matches the expected file type."""
+    if request.method != 'POST':
+        return JsonResponse({'valid': False, 'error': 'POST required'}, status=405)
+
+    file = request.FILES.get('file')
+    file_type = request.POST.get('file_type', '')
+
+    if not file:
+        return JsonResponse({'valid': False, 'error': 'No file provided'})
+
+    def norm(s):
+        return str(s).lower().replace(' ', '').replace('_', '')
+
+    def get_all_headers(file_obj):
+        """Read first header row from every sheet using openpyxl read-only — fast on large files."""
+        import openpyxl
+        file_obj.seek(0)
+        wb = openpyxl.load_workbook(file_obj, read_only=True, data_only=True)
+        cols = []
+        for sh in wb.sheetnames:
+            ws = wb[sh]
+            for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
+                cols += [norm(c) for c in row if c is not None]
+                break
+        wb.close()
+        return cols
+
+    try:
+        ext = file.name.split('.')[-1].lower()
+        if ext not in ['xlsx', 'xls', 'csv']:
+            return JsonResponse({'valid': False, 'error': 'Invalid format — only .xlsx, .xls, .csv allowed'})
+
+        if ext in ['xlsx', 'xls']:
+            try:
+                all_cols = get_all_headers(file)
+            except Exception:
+                return JsonResponse({'valid': False, 'error': 'File appears corrupted or is not a valid Excel file'})
+
+            if file_type == 'total_merchant':
+                has_merchant = any('merchant' in c or 'merchantid' in c or 'merchantcode' in c for c in all_cols)
+                has_account  = any('account' in c for c in all_cols)
+                has_province = any('province' in c for c in all_cols)
+                if not (has_account and has_province and has_merchant):
+                    return JsonResponse({'valid': False,
+                        'error': 'Wrong file — Total Merchant file must have merchant, account, and province columns'})
+
+            elif file_type == 'card_data':
+                if not any('card' in c or 'pan' in c for c in all_cols):
+                    return JsonResponse({'valid': False,
+                        'error': 'Wrong file — Card Data must have a card/PAN number column'})
+
+            elif file_type == 'phonepay':
+                if not any('amount' in c or 'merchant' in c or 'account' in c for c in all_cols):
+                    return JsonResponse({'valid': False,
+                        'error': 'Wrong file — FonePay Payment Details must have amount, merchant, or account columns'})
+
+            elif file_type == 'nepalpay':
+                if not any('amount' in c or 'merchant' in c or 'account' in c for c in all_cols):
+                    return JsonResponse({'valid': False,
+                        'error': 'Wrong file — NepalPay Payment Details must have amount, merchant, or account columns'})
+
+            elif file_type == 'cardless':
+                if not any('amount' in c or 'transaction' in c or 'cardless' in c for c in all_cols):
+                    return JsonResponse({'valid': False,
+                        'error': 'Wrong file — Cardless Report must have amount or transaction columns'})
+
+            elif file_type in ('mobile_banking', 'connect_ips'):
+                if not any('account' in c or 'user' in c or 'customer' in c for c in all_cols):
+                    label = 'Mobile Banking' if file_type == 'mobile_banking' else 'Connect IPS'
+                    return JsonResponse({'valid': False,
+                        'error': f'Wrong file — {label} Users Data must have an account, user, or customer column'})
+
+        elif ext == 'csv':
+            file.seek(0)
+            try:
+                import csv as _csv
+                reader = _csv.reader(io.StringIO(file.read().decode('utf-8', errors='ignore')))
+                all_cols = [norm(c) for c in next(reader, [])]
+                if file_type in ('mobile_banking', 'connect_ips'):
+                    if not any('account' in c or 'user' in c or 'customer' in c for c in all_cols):
+                        label = 'Mobile Banking' if file_type == 'mobile_banking' else 'Connect IPS'
+                        return JsonResponse({'valid': False,
+                            'error': f'Wrong file — {label} Users Data must have an account, user, or customer column'})
+            except Exception:
+                return JsonResponse({'valid': False, 'error': 'Invalid CSV file'})
+
+        return JsonResponse({'valid': True})
+
+    except Exception as e:
+        return JsonResponse({'valid': False, 'error': f'Validation error: {str(e)[:120]}'})
+
+@login_required_custom
 def api_start(request):
     """Accept files, start background pipeline, return unique_id."""
     if request.method != 'POST':
@@ -2600,6 +2694,10 @@ def review_missing_data(request, unique_id):
         'districts_list': districts_list,
         'local_cats': local_cats,
         'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
+        'user': request.session.get('user', ''),
+        'full_name': request.session.get('full_name', ''),
+        'is_admin': request.session.get('is_admin', False),
+        'institution_name': getattr(settings, 'INSTITUTION_NAME', ''),
     })
 
 @login_required_custom
@@ -2772,7 +2870,11 @@ def apply_manual_mapping(request, unique_id):
 @login_required_custom
 def finalize_report(request, unique_id):
     """Renders the full results page. Generates report if not already created."""
-    step3_filename = f'Additional_Payment_Report_ASCII_{unique_id}.xlsx'
+    meta = _load_meta(unique_id)
+    month_name = meta.get('month', '')
+    year_val   = meta.get('year', '')
+    month_lower = month_name.lower() if month_name else 'unknown'
+    step3_filename = f'Merchant_User_report_{month_lower}_{year_val}.xlsx'
     step3_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', step3_filename)
 
     # Only generate if not already done (e.g. by the background pipeline or api_finalize)
@@ -2839,10 +2941,38 @@ def finalize_report(request, unique_id):
 @login_required_custom
 def download_sheet(request, filename):
     file_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', filename)
-    if os.path.exists(file_path):
-        return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=filename)
-    else:
+    if not os.path.exists(file_path):
         raise Http404("File not found")
+
+    # Build a friendly download name using month/year from the batch
+    display_name = filename  # fallback
+    try:
+        # All internal filenames are {prefix}_{uid}.xlsx — uid is always the last segment before .xlsx
+        stem = filename.rsplit('.', 1)[0]   # e.g. "step1_fonepay_7a7c267d"
+        uid  = stem.rsplit('_', 1)[-1]      # e.g. "7a7c267d"
+        meta = _load_meta(uid)
+        month = meta.get('month', '')
+        year  = meta.get('year', '')
+        if month and year:
+            m = month.lower()
+            prefix_map = {
+                f'step1_fonepay_{uid}':  f'fonepay_raw_{m}_{year}',
+                f'step1_nepalpay_{uid}': f'nepalpay_raw_{m}_{year}',
+                f'step2_fonepay_{uid}':  f'fonepay_enriched_{m}_{year}',
+                f'step2_nepalpay_{uid}': f'nepalpay_enriched_{m}_{year}',
+                f'card_data_{uid}':      f'card_data_{m}_{year}',
+                f'phonepay_{uid}':       f'phonepay_{m}_{year}',
+                f'nepalpay_{uid}':       f'nepalpay_{m}_{year}',
+                f'cardless_{uid}':       f'cardless_{m}_{year}',
+                f'mb_users_{uid}':       f'mobile_banking_{m}_{year}',
+                f'ips_users_{uid}':      f'connect_ips_{m}_{year}',
+            }
+            ext = filename.rsplit('.', 1)[-1]
+            display_name = prefix_map.get(stem, stem) + '.' + ext
+    except Exception:
+        pass
+
+    return FileResponse(open(file_path, 'rb'), as_attachment=True, filename=display_name)
 
 
 # --- Sheet 11 Users Review (Option B: separate review page) ---
@@ -2867,6 +2997,10 @@ def users_review(request, unique_id):
         'missing_records': missing,
         'country_choices': country_choices,
         'gender_choices': [('M', 'Male'), ('F', 'Female'), ('C', 'Company')],
+        'user': request.session.get('user', ''),
+        'full_name': request.session.get('full_name', ''),
+        'is_admin': request.session.get('is_admin', False),
+        'institution_name': getattr(settings, 'INSTITUTION_NAME', ''),
     })
 
 

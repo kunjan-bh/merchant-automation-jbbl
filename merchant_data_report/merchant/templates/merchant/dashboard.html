@@ -9,16 +9,16 @@
   <style>
     /* Minor local tweaks: Generate panel becomes a call-to-action card */
     .generate-cta {
-      display: flex; flex-direction: column; gap: 12px;
-      padding: 18px; border-radius: 10px;
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 12px 14px; border-radius: 10px;
       background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
       border: 1px solid #dbeafe;
     }
-    .generate-cta p { font-size: .8rem; color: var(--text-muted); line-height: 1.5; }
+    .generate-cta p { font-size: .75rem; color: var(--text-muted); line-height: 1.4; margin: 0; }
     .generate-cta ul {
       list-style: none; padding: 0; margin: 0;
-      display: flex; flex-direction: column; gap: 4px;
-      font-size: .75rem; color: var(--text-muted);
+      display: flex; flex-direction: column; gap: 2px;
+      font-size: .72rem; color: var(--text-muted);
     }
     .generate-cta ul li::before { content: "•  "; color: var(--bank-blue-lt); }
     .admin-link {
@@ -106,8 +106,11 @@
       font-size: .92rem; font-weight: 600; cursor: pointer;
       transition: opacity .15s, transform .12s;
     }
-    .ov-submit:hover { opacity: .92; transform: translateY(-1px); }
-    .ov-submit:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+    .ov-submit:hover:not(:disabled) { opacity: .92; transform: translateY(-1px); }
+    .ov-submit:disabled { opacity: .55; cursor: not-allowed; transform: none; background: #9ca3af; }
+    .ov-file-msg { font-size: .75rem; padding: 4px 8px; border-radius: 4px; display: none; margin-top: 2px; }
+    .ov-file-msg.error    { display: block; background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
+    .ov-file-msg.checking { display: block; background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
 
     /* Timeline (processing animation) */
     .ov-timeline { display: none; }
@@ -218,30 +221,57 @@
   <main class="dash-main">
 
     <!-- LEFT PANEL — Generate (link to existing multi-stage upload) -->
-    <section class="panel panel-generate">
-      <div class="panel-header">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        <h2>Generate NRB Report</h2>
-      </div>
-      <div class="panel-subheader">
-        <span class="inst-badge">{{ institution_name }} ({{ institution_code }})</span>
-      </div>
+    <section class="">
+      <div class="panel panel-generate">
+        <div class="panel-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          <h2>Generate NRB Report</h2>
+        </div>
+        <div class="panel-subheader" style="margin-bottom: 8px; margin-top: -6px;">
+          <span class="inst-badge">{{ institution_name }} ({{ institution_code }})</span>
+        </div>
 
-      <div class="generate-cta">
-        <p><strong>Upload your monthly data files</strong> and the pipeline will auto-classify merchants, match CBS records, prompt manual review for missing data, and produce the final NRB report.</p>
-        <ul>
-          <li>Merchant data file</li>
-          <li>Card data / FonePay / NepalPay</li>
-          <li>Cardless report</li>
-          <li>Mobile banking + Connect IPS users</li>
-        </ul>
-      </div>
+        <div class="generate-cta" style="margin-bottom: 10px;">
+          <p><strong>Upload your monthly data files</strong> and the pipeline will auto-classify merchants, match CBS records, prompt manual review for missing data, and produce the final NRB report.</p>
+          <ul>
+            <li>Merchant data file</li>
+            <li>Card data / FonePay / NepalPay</li>
+            <li>Cardless report</li>
+            <li>Mobile banking + Connect IPS users</li>
+          </ul>
+        </div>
 
-      <button type="button" class="btn-generate" id="openUploadOverlayBtn">
-        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-        Start New Report
-      </button>
+        <button type="button" class="btn-generate" id="openUploadOverlayBtn" style="padding: 10px 14px; font-size: .9rem;">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+          Start New Report
+        </button>
+      </div>
+      <details class="change-password-details">
+        <summary class="change-password-summary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1v6m4-2v2m-8-2v2M7 9a5 5 0 1 0 10 0H7zm1 3a2 2 0 1 1 4 0 2 2 0 0 1-4 0z"/>
+          </svg>
+          Change Password
+        </summary>
+        <form method="post" action="{% url 'change_password' %}" class="change-password-form">
+          {% csrf_token %}
+          <div class="pw-form-row">
+            <label>Current Password</label>
+            <input type="password" name="current_password" required>
+          </div>
+          <div class="pw-form-row">
+            <label>New Password</label>
+            <input type="password" name="new_password" required>
+          </div>
+          <div class="pw-form-row">
+            <label>Confirm New Password</label>
+            <input type="password" name="confirm_password" required>
+          </div>
+          <button type="submit" class="btn-pw-change">Update</button>
+        </form>
+      </details>
     </section>
+    
 
     <!-- CENTER PANEL — Passed Reports (shared across all users) -->
     <section class="panel panel-shared">
@@ -418,6 +448,7 @@
       {% endif %}
     </section>
 
+
   </main>
 
   <!-- ─────────────────────────────────────────────────────────────────
@@ -439,19 +470,26 @@
           {% csrf_token %}
           <div class="ov-file-grid">
             <div class="ov-file-row"><label>Total Merchant File (FonePay + NepalPay)</label>
-              <input type="file" name="file" accept=".xlsx,.xls" required></div>
+              <input type="file" id="ov_file" name="file" accept=".xlsx,.xls" required data-file-type="total_merchant">
+              <div class="ov-file-msg" id="ov_file_msg"></div></div>
             <div class="ov-file-row"><label>Card Data</label>
-              <input type="file" name="card_data" accept=".xlsx,.xls" required></div>
+              <input type="file" id="ov_card_data" name="card_data" accept=".xlsx,.xls" required data-file-type="card_data">
+              <div class="ov-file-msg" id="ov_card_data_msg"></div></div>
             <div class="ov-file-row"><label>FonePay Payment Details</label>
-              <input type="file" name="phonepay_details" accept=".xlsx,.xls" required></div>
+              <input type="file" id="ov_phonepay" name="phonepay_details" accept=".xlsx,.xls" required data-file-type="phonepay">
+              <div class="ov-file-msg" id="ov_phonepay_msg"></div></div>
             <div class="ov-file-row"><label>NepalPay Payment Details</label>
-              <input type="file" name="nepalpay_details" accept=".xlsx,.xls" required></div>
+              <input type="file" id="ov_nepalpay" name="nepalpay_details" accept=".xlsx,.xls" required data-file-type="nepalpay">
+              <div class="ov-file-msg" id="ov_nepalpay_msg"></div></div>
             <div class="ov-file-row"><label>Cardless Report</label>
-              <input type="file" name="cardless_report" accept=".xlsx,.xls" required></div>
+              <input type="file" id="ov_cardless" name="cardless_report" accept=".xlsx,.xls" required data-file-type="cardless">
+              <div class="ov-file-msg" id="ov_cardless_msg"></div></div>
             <div class="ov-file-row"><label>Mobile Banking Users Data</label>
-              <input type="file" name="mobile_banking" accept=".xlsx,.xls,.csv" required></div>
+              <input type="file" id="ov_mb" name="mobile_banking" accept=".xlsx,.xls,.csv" required data-file-type="mobile_banking">
+              <div class="ov-file-msg" id="ov_mb_msg"></div></div>
             <div class="ov-file-row"><label>Connect IPS Users Data</label>
-              <input type="file" name="connect_ips" accept=".xlsx,.xls,.csv" required></div>
+              <input type="file" id="ov_ips" name="connect_ips" accept=".xlsx,.xls,.csv" required data-file-type="connect_ips">
+              <div class="ov-file-msg" id="ov_ips_msg"></div></div>
           </div>
 
           <div class="ov-meta-row">
@@ -527,6 +565,71 @@
       if (!openBtn || !overlay) return;
 
       let uid = null, pollTimer = null, isProcessing = false;
+
+      // ── Per-file validation ──
+      const fileInputIds = ['ov_file','ov_card_data','ov_phonepay','ov_nepalpay','ov_cardless','ov_mb','ov_ips'];
+      const fileValid = {};   // null=not checked, true=ok, false=error
+      fileInputIds.forEach(id => { fileValid[id] = null; });
+
+      function setMsg(id, type, text) {
+        const el = document.getElementById(id + '_msg');
+        if (!el) return;
+        el.className = 'ov-file-msg ' + type;
+        el.textContent = text;
+      }
+
+      function refreshSubmit() {
+        const allOk = fileInputIds.every(id => fileValid[id] === true);
+        submitBtn.disabled = !allOk;
+        submitBtn.title = allOk ? '' : 'Validate all files before proceeding';
+      }
+
+      async function validateOne(input) {
+        const id = input.id;
+        const file = input.files[0];
+        if (!file) { fileValid[id] = null; setMsg(id, '', ''); refreshSubmit(); return; }
+
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['xlsx','xls','csv'].includes(ext)) {
+          fileValid[id] = false;
+          setMsg(id, 'error', 'Invalid format — only .xlsx / .xls / .csv allowed');
+          refreshSubmit(); return;
+        }
+
+        setMsg(id, 'checking', '⏳ Checking file…');
+        fileValid[id] = null;
+        refreshSubmit();
+
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('file_type', input.dataset.fileType);
+        const csrf = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+
+        try {
+          const res  = await fetch('/api/validate-file/', { method:'POST', body:fd, headers:{'X-CSRFToken': csrf} });
+          const data = await res.json();
+          if (data.valid) {
+            fileValid[id] = true;
+            setMsg(id, '', '');   // hide — no green tick needed
+          } else {
+            fileValid[id] = false;
+            setMsg(id, 'error', '✗ ' + data.error);
+          }
+        } catch(e) {
+          fileValid[id] = false;
+          setMsg(id, 'error', '✗ Could not validate — check your connection');
+        }
+        refreshSubmit();
+      }
+
+      // Attach change listener to every file input immediately
+      fileInputIds.forEach(id => {
+        const inp = document.getElementById(id);
+        if (inp) inp.addEventListener('change', () => validateOne(inp));
+      });
+
+      // Start with submit disabled
+      submitBtn.disabled = true;
 
       const stepLabels = [
         "Reading Excel workbook to understand structure",
@@ -651,8 +754,8 @@
         else if (status === 'complete') {
           clearInterval(pollTimer);
           for (let i = 1; i <= TOTAL_STEPS; i++) setStep(i, 'done');
-          tlSub.textContent = 'Done — opening report...';
-          setTimeout(() => { window.location.href = '/finalize/' + uid + '/'; }, 700);
+          tlSub.textContent = 'Report ready — returning to dashboard...';
+          setTimeout(() => { window.location.href = '/dashboard/'; }, 1200);
         }
         else if (status === 'error') {
           clearInterval(pollTimer);
@@ -670,6 +773,8 @@
 
       form.addEventListener('submit', function(e) {
         e.preventDefault();
+        const allOk = fileInputIds.every(id => fileValid[id] === true);
+        if (!allOk) { showError('Please fix all file validation errors above before proceeding.'); return; }
         errBox.style.display = 'none';
         submitBtn.disabled = true;
         submitBtn.innerHTML = `<svg class="icon-spinner" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Starting...`;

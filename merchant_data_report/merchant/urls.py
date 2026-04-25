@@ -12,6 +12,14 @@ urlpatterns = [
     path('admin/',                     auth.admin_logs,          name='admin_logs'),
     path('admin/log/<str:filename>/',  auth.admin_download_log,  name='admin_download_log'),
 
+    # ── User management (admin only) ──────────────────────────────────
+    path('admin/users/create/',                     auth.admin_user_create,        name='admin_user_create'),
+    path('admin/users/<int:pk>/toggle-admin/',     auth.admin_user_toggle_admin,  name='admin_user_toggle_admin'),
+    path('admin/users/<int:pk>/toggle-active/',    auth.admin_user_toggle_active, name='admin_user_toggle_active'),
+    path('admin/users/<int:pk>/reset-password/',   auth.admin_user_reset_password,name='admin_user_reset_password'),
+    path('admin/users/<int:pk>/delete/',           auth.admin_user_delete,        name='admin_user_delete'),
+    path('account/change-password/',               auth.change_password_view,     name='change_password'),
+
     # ── Batch-level actions ───────────────────────────────────────────
     path('verify/<int:pk>/',       auth.toggle_verified, name='toggle_verified'),
     path('download/final/<int:pk>/', auth.download_final, name='download_final'),
@@ -29,6 +37,7 @@ urlpatterns = [
     path('download/<str:filename>/',         views.download_sheet,       name='download_sheet'),
 
     # ── API endpoints ─────────────────────────────────────────────────
+    path('api/validate-file/',                  views.api_validate_file,        name='api_validate_file'),
     path('api/start/',                          views.api_start,                name='api_start'),
     path('api/progress/<str:unique_id>/',       views.api_progress,             name='api_progress'),
     path('api/finalize/<str:unique_id>/',       views.api_finalize,             name='api_finalize'),

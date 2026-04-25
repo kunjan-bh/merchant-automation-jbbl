@@ -1,205 +1,194 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Review Missing User Data (Sheet 11)</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --primary-bg: #f9fafb;
-            --card-bg: #ffffff;
-            --text-main: #1f2937;
-            --text-muted: #6b7280;
-            --accent-color: #3b82f6;
-            --accent-hover: #2563eb;
-            --border-color: #e5e7eb;
-            --warn-bg: #fef3c7;
-            --warn-text: #92400e;
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: 'Inter', sans-serif;
-            background: var(--primary-bg);
-            color: var(--text-main);
-            min-height: 100vh;
-            padding: 2rem;
-            display: flex;
-            justify-content: center;
-        }
-        .container {
-            background: var(--card-bg);
-            width: 100%;
-            max-width: 1200px;
-            padding: 2.5rem;
-            border-radius: 16px;
-            box-shadow: var(--shadow-lg);
-        }
-        h2 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
-        .sub { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.95rem; }
-        .notice {
-            background: var(--warn-bg);
-            color: var(--warn-text);
-            padding: 0.9rem 1.2rem;
-            border-radius: 10px;
-            margin-bottom: 1.5rem;
-            font-size: 0.9rem;
-            font-weight: 500;
-        }
-        .msgs { margin-bottom: 1rem; }
-        .msg {
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
-            margin-bottom: 0.5rem;
-            font-size: 0.9rem;
-        }
-        .msg.warning { background: #fef3c7; color: #92400e; }
-        .msg.success { background: #d1fae5; color: #065f46; }
-        .table-wrap {
-            max-height: 60vh;
-            overflow-y: auto;
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-        }
-        table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-        th, td { padding: 0.75rem 0.9rem; text-align: left; border-bottom: 1px solid var(--border-color); }
-        th {
-            background: var(--primary-bg);
-            position: sticky;
-            top: 0;
-            font-weight: 600;
-            z-index: 10;
-        }
-        tr:last-child td { border-bottom: none; }
-        .source-badge {
-            display: inline-block;
-            padding: 0.15rem 0.55rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        .source-badge.MB { background: #dbeafe; color: #1e40af; }
-        .source-badge.IPS { background: #fce7f3; color: #9f1239; }
-        select, input[type="date"] {
-            width: 100%;
-            padding: 0.45rem 0.6rem;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            font-size: 0.85rem;
-            background: white;
-            font-family: inherit;
-        }
-        select:focus, input[type="date"]:focus {
-            outline: none;
-            border-color: var(--accent-color);
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
-        td.filled { color: var(--text-muted); font-size: 0.82rem; }
-        .actions {
-            margin-top: 1.5rem;
-            display: flex;
-            justify-content: flex-end;
-            gap: 0.75rem;
-        }
-        button {
-            padding: 0.75rem 1.8rem;
-            border: none;
-            border-radius: 10px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            cursor: pointer;
-            font-family: inherit;
-            transition: all 0.15s;
-        }
-        .btn-primary {
-            background: var(--accent-color);
-            color: white;
-        }
-        .btn-primary:hover { background: var(--accent-hover); }
-        .account {
-            font-family: 'SF Mono', Menlo, Monaco, monospace;
-            font-size: 0.82rem;
-            color: var(--text-main);
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Review User Data — {{ institution_name }}</title>
+  <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+  <style>
+    .review-wrap { max-width: 1100px; margin: 32px auto; padding: 0 24px 48px; }
+    .review-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .review-card-head {
+      padding: 20px 24px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    }
+    .review-card-head h2 { font-size: 1.05rem; font-weight: 700; color: var(--text-main); margin: 0; }
+    .review-card-head p  { font-size: .8rem; color: var(--text-muted); margin: 2px 0 0; }
+    .notice-bar {
+      margin: 16px 24px; padding: 10px 14px;
+      background: #fef3c7; border: 1px solid #fde68a; border-radius: 7px;
+      font-size: .82rem; color: #92400e; font-weight: 500;
+    }
+    .table-wrap { overflow-x: auto; max-height: 62vh; overflow-y: auto; }
+    .table-wrap::-webkit-scrollbar { width: 5px; height: 5px; }
+    .table-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: .83rem; }
+    th {
+      background: var(--bg-page); padding: 10px 14px;
+      font-weight: 600; font-size: .78rem; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: .04em;
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 5;
+    }
+    td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--bg-page); }
+    .source-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: .72rem; font-weight: 700;
+    }
+    .source-badge.MB  { background: #dbeafe; color: #1e40af; }
+    .source-badge.IPS { background: #fce7f3; color: #9f1239; }
+    .acc { font-family: monospace; font-size: .82rem; }
+    select, input[type="date"] {
+      width: 100%; padding: 6px 8px;
+      border: 1px solid var(--border); border-radius: 6px;
+      font-size: .82rem; background: #fff; font-family: inherit;
+      color: var(--text-main); transition: border-color .15s;
+    }
+    select:focus, input[type="date"]:focus {
+      outline: none; border-color: var(--bank-blue-lt);
+      box-shadow: 0 0 0 3px rgba(37,99,192,.1);
+    }
+    .filled { font-size: .8rem; color: var(--text-muted); }
+    .review-footer {
+      padding: 16px 24px; border-top: 1px solid var(--border);
+      display: flex; justify-content: flex-end; gap: 10px; align-items: center;
+    }
+    .btn-cancel {
+      background: none; border: none; color: var(--text-muted);
+      font-size: .88rem; font-weight: 500; cursor: pointer; padding: 0;
+    }
+    .btn-cancel:hover { color: var(--text-main); }
+    .btn-apply {
+      background: linear-gradient(135deg, var(--bank-blue) 0%, var(--bank-blue-lt) 100%);
+      color: #fff; border: none; border-radius: 7px; padding: 9px 22px;
+      font-size: .88rem; font-weight: 600; cursor: pointer;
+      transition: opacity .15s; font-family: inherit;
+    }
+    .btn-apply:hover { opacity: .9; }
+    .page-breadcrumb {
+      display: flex; align-items: center; gap: 8px;
+      font-size: .8rem; color: var(--text-muted); margin-bottom: 18px;
+    }
+    .page-breadcrumb a { color: var(--bank-blue-lt); text-decoration: none; font-weight: 500; }
+    .page-breadcrumb span { color: var(--border); }
+  </style>
 </head>
-<body>
-    <div class="container">
-        <h2>Review Missing User Data</h2>
-        <p class="sub">Some Mobile Banking / Connect IPS accounts couldn't be fully resolved from CBS. Fill in the missing fields below to proceed with Sheet 11 (Digital Channel Users).</p>
+<body class="dash-body">
 
-        {% if messages %}
-        <div class="msgs">
-            {% for message in messages %}
-            <div class="msg {{ message.tags }}">{{ message }}</div>
-            {% endfor %}
+  <header class="topnav">
+    <div class="topnav-left">
+      <div class="nav-brand">
+        <div class="nav-logo">
+          <img src="{% static 'merchant/img/jbbllogo.jpg' %}" alt="Logo">
         </div>
-        {% endif %}
-
-        <div class="notice">
-            {{ missing_records|length }} record(s) need attention. Fields left blank below will stay unresolved and those rows will be excluded from Sheet 11 totals.
+        <div>
+          <div class="nav-title">{{ institution_name }}</div>
+          <div class="nav-subtitle">NRB Merchant Report System</div>
         </div>
-
-        <form method="post" action="{% url 'users_apply' unique_id %}">
-            {% csrf_token %}
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Source</th>
-                            <th>Account Number</th>
-                            <th style="width: 180px;">Country Code</th>
-                            <th style="width: 160px;">Gender</th>
-                            <th style="width: 170px;">DOB</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in missing_records %}
-                        <tr>
-                            <td><span class="source-badge {{ row.source }}">{{ row.source }}</span></td>
-                            <td class="account">{{ row.account }}</td>
-                            <td>
-                                {% if row.needs_country_code %}
-                                <select name="cc_{{ row.idx }}">
-                                    <option value="">-- select --</option>
-                                    {% for code, label in country_choices %}
-                                    <option value="{{ code }}">{{ code }} — {{ label }}</option>
-                                    {% endfor %}
-                                </select>
-                                {% else %}
-                                <span class="filled">{{ row.country_code }}</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if row.needs_gender %}
-                                <select name="g_{{ row.idx }}">
-                                    <option value="">-- select --</option>
-                                    {% for code, label in gender_choices %}
-                                    <option value="{{ code }}">{{ label }}</option>
-                                    {% endfor %}
-                                </select>
-                                {% else %}
-                                <span class="filled">{{ row.gender }}</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if row.needs_dob %}
-                                <input type="date" name="dob_{{ row.idx }}" max="2025-12-31">
-                                {% else %}
-                                <span class="filled">{{ row.dob }}</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="actions">
-                <button type="submit" class="btn-primary">Apply &amp; Generate Report</button>
-            </div>
-        </form>
+      </div>
     </div>
+    <div class="topnav-right">
+      <div class="user-pill">
+        <div class="user-avatar">{{ full_name|first|upper }}</div>
+        <div class="user-info">
+          <span class="user-name">{{ full_name }}</span>
+          <span class="user-role">{% if is_admin %}Administrator{% else %}Report Officer{% endif %}</span>
+        </div>
+      </div>
+      <a href="{% url 'logout' %}" class="btn-logout">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z" clip-rule="evenodd"/></svg>
+        Logout
+      </a>
+    </div>
+  </header>
+
+  <div class="review-wrap">
+    <div class="page-breadcrumb">
+      <a href="{% url 'dashboard' %}">Dashboard</a>
+      <span>›</span>
+      <span>Review User Data</span>
+    </div>
+
+    <form method="post" action="{% url 'users_apply' unique_id %}">
+      {% csrf_token %}
+      <div class="review-card">
+        <div class="review-card-head">
+          <div>
+            <h2>Review Missing User Data</h2>
+            <p>Mobile Banking &amp; Connect IPS accounts that couldn't be fully resolved from CBS. Fill in what's missing to include them in Sheet 11.</p>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="btn-cancel" onclick="skipAndProceed()">Skip &amp; Proceed Without Changes</button>
+            <button type="submit" class="btn-apply">Apply &amp; Continue</button>
+          </div>
+        </div>
+
+        <div class="notice-bar">
+          {{ missing_records|length }} record{{ missing_records|length|pluralize }} need attention — fields left blank will be excluded from Sheet 11 totals.
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Account Number</th>
+                <th style="width:180px">Country Code</th>
+                <th style="width:150px">Gender</th>
+                <th style="width:160px">Date of Birth</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in missing_records %}
+              <tr>
+                <td><span class="source-badge {{ row.source }}">{{ row.source }}</span></td>
+                <td class="acc">{{ row.account }}</td>
+                <td>
+                  {% if row.needs_country_code %}
+                  <select name="cc_{{ row.idx }}">
+                    <option value="">— select —</option>
+                    {% for code, label in country_choices %}
+                    <option value="{{ code }}">{{ code }} — {{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  {% else %}<span class="filled">{{ row.country_code }}</span>{% endif %}
+                </td>
+                <td>
+                  {% if row.needs_gender %}
+                  <select name="g_{{ row.idx }}">
+                    <option value="">— select —</option>
+                    {% for code, label in gender_choices %}
+                    <option value="{{ code }}">{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  {% else %}<span class="filled">{{ row.gender }}</span>{% endif %}
+                </td>
+                <td>
+                  {% if row.needs_dob %}
+                  <input type="date" name="dob_{{ row.idx }}" max="2025-12-31">
+                  {% else %}<span class="filled">{{ row.dob }}</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="review-footer">
+          <button type="button" class="btn-cancel" onclick="skipAndProceed()">Skip &amp; Proceed Without Changes</button>
+          <button type="submit" class="btn-apply">Apply &amp; Continue</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function skipAndProceed() {
+      window.location.href = '/api/finalize/{{ unique_id }}/?skip_review=1';
+    }
+  </script>
 </body>
 </html>

@@ -203,7 +203,7 @@ a { text-decoration: none; }
 .dash-main {
   display: grid;
   grid-template-columns: 320px 1fr 10px 300px;
-  gap: 0 0;
+  gap: 20px 0;
   column-gap: 0;
   padding: 20px 28px;
   min-height: calc(100vh - 60px);
@@ -227,7 +227,9 @@ a { text-decoration: none; }
   box-shadow: var(--shadow);
   padding: 22px 22px 18px;
   display: flex; flex-direction: column; gap: 14px;
+ 
 }
+
 
 .panel-header {
   display: flex; align-items: center; gap: 10px;
@@ -797,6 +799,10 @@ a { text-decoration: none; }
   }
   .panel-shared { max-height: none; }
 }
+@media (max-width: 1200px) {
+  .pw-form-row { min-width: 80px; }
+}
+
 @media (max-width: 720px) {
   .dash-main, .dash-main.sidebar-hidden {
     grid-template-columns: 1fr;
@@ -804,6 +810,9 @@ a { text-decoration: none; }
   }
   .panel-generate { margin-right: 0; }
   .panel-my-logs  { margin-left: 0; }
+  .pw-form-row { min-width: 100%; }
+  .change-password-form { flex-direction: column; }
+  .btn-pw-change { align-self: flex-start; }
 }
 
 /* Pagination total count label */
@@ -811,4 +820,79 @@ a { text-decoration: none; }
   font-size: .7rem;
   color: var(--text-light);
   margin-left: 3px;
+}
+
+/* ── Change Password Section ──────────────────────────────── */
+.change-password-details {
+  margin-top: 8px; background: #fff; border-radius: 8px;
+  max-width: 19.5vw;
+  box-shadow: var(--shadow);
+}
+
+.change-password-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.change-password-details summary {
+  list-style: none;
+}
+
+.change-password-summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border-radius: 8px; background: #f8fafc;
+  border: 1.5px solid var(--border); cursor: pointer; font-size: .9rem;
+  font-weight: 600; color: var(--text-main); transition: all .2s ease;
+  user-select: none;
+}
+
+.change-password-summary:hover {
+  background: #eff6ff; border-color: var(--bank-blue);
+}
+
+.change-password-summary svg {
+  flex-shrink: 0; width: 16px; height: 16px; color: var(--bank-blue);
+}
+
+.change-password-details[open] .change-password-summary {
+  background: var(--bank-blue); color: #fff; border-color: var(--bank-blue);
+  border-radius: 8px 8px 0 0;
+}
+
+.change-password-details[open] .change-password-summary svg {
+  color: #fff;
+}
+
+.change-password-form {
+  padding: 10px 12px; background: #fff; border: 1.5px solid var(--border);
+  border-top: none; border-radius: 0 0 8px 8px; display: flex;
+  gap: 8px; align-items: flex-end; flex-wrap: wrap; width: 100%;
+  box-sizing: border-box;
+}
+
+.pw-form-row {
+  display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 90px;
+}
+
+.pw-form-row label {
+  font-size: .65rem; font-weight: 600; color: var(--text-main);
+}
+
+.pw-form-row input[type="password"] {
+  padding: 7px 9px; border: 1.5px solid var(--border);
+  border-radius: 5px; font-size: .8rem; font-family: inherit;
+  transition: border-color .15s;
+}
+
+.pw-form-row input[type="password"]:focus {
+  outline: none; border-color: var(--bank-blue); box-shadow: 0 0 0 2px #eff6ff;
+}
+
+.btn-pw-change {
+  padding: 7px 10px; background: var(--bank-blue); color: #fff;
+  border: none; border-radius: 5px; font-size: .75rem; font-weight: 600;
+  cursor: pointer; transition: all .15s; flex-shrink: 0;
+}
+
+.btn-pw-change:hover {
+  background: var(--bank-blue-mid);
 }
