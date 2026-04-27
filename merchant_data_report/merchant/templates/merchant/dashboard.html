@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NRB Merchant Dashboard — Jyoti Bikas Bank</title>
   <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+  <script src="{% static 'merchant/js/ui.js' %}" defer></script>
   <style>
     /* Minor local tweaks: Generate panel becomes a call-to-action card */
     .generate-cta {
@@ -203,19 +204,13 @@
   </header>
 
   {% if messages %}
-  <div class="messages-bar">
-    {% for msg in messages %}
-    <div class="flash flash-{{ msg.tags }}">
-      {% if msg.tags == 'error' %}
-      <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
-      {% else %}
-      <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-      {% endif %}
-      <span class="flash-msg-text">{{ msg }}</span>
-      <button class="flash-close" onclick="this.parentElement.remove()">&times;</button>
-    </div>
-    {% endfor %}
-  </div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      {% for msg in messages %}
+        showToast("{{ msg|escapejs }}", "{% if msg.tags == 'error' %}error{% elif msg.tags == 'warning' %}warning{% elif msg.tags == 'success' %}success{% else %}info{% endif %}");
+      {% endfor %}
+    });
+  </script>
   {% endif %}
 
   <main class="dash-main">
@@ -653,7 +648,14 @@
         document.body.style.overflow = 'hidden';
       }
       function close() {
-        if (isProcessing && !confirm('Pipeline is still processing. Close anyway? (it will keep running in background)')) return;
+        if (isProcessing) {
+          showConfirm(
+            'The pipeline is still processing. Closing will not stop it — it will keep running in the background.',
+            () => { overlay.classList.remove('show'); document.body.style.overflow = ''; },
+            { title: 'Close while processing?', okLabel: 'Close anyway' }
+          );
+          return;
+        }
         overlay.classList.remove('show');
         document.body.style.overflow = '';
       }

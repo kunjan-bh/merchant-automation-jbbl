@@ -37,6 +37,7 @@ urlpatterns = [
     path('download/<str:filename>/',         views.download_sheet,       name='download_sheet'),
 
     # ── API endpoints ─────────────────────────────────────────────────
+    path('api/analytics/',                      views.analytics_api,            name='analytics_api'),
     path('api/validate-file/',                  views.api_validate_file,        name='api_validate_file'),
     path('api/start/',                          views.api_start,                name='api_start'),
     path('api/progress/<str:unique_id>/',       views.api_progress,             name='api_progress'),

@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin — Activity Logs</title>
   <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+  <script src="{% static 'merchant/js/ui.js' %}" defer></script>
   <style>
     .admin-wrap { max-width: 1400px; margin: 20px auto; padding: 0 28px; }
     .admin-grid { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
@@ -132,6 +133,7 @@
       <button class="admin-tab active" onclick="switchTab(event, 'logs')">Activity Logs</button>
       <button class="admin-tab" onclick="switchTab(event, 'users')">Users</button>
       <button class="admin-tab" onclick="switchTab(event, 'clean-data')">Clean Data</button>
+      <button class="admin-tab" onclick="switchTab(event, 'analytics'); initAnalytics()">Analytics</button>
     </div>
 
     <!-- Activity Logs Tab -->
@@ -344,9 +346,9 @@
                       {% csrf_token %}
                       <button type="submit" class="action-btn">Reset PW</button>
                     </form>
-                    <form method="post" action="{% url 'admin_user_delete' user.id %}" style="display: inline;" onsubmit="return confirm('Delete {{ user.username }}?');">
+                    <form method="post" action="{% url 'admin_user_delete' user.id %}" style="display: inline;" class="confirm-delete-form" data-username="{{ user.username }}">
                       {% csrf_token %}
-                      <button type="submit" class="action-btn action-btn-delete">Delete</button>
+                      <button type="button" class="action-btn action-btn-delete" onclick="confirmDeleteUser(this)">Delete</button>
                     </form>
                     {% else %}
                     <span style="font-size: .7rem; color: var(--text-muted);">Primary Admin</span>
@@ -416,9 +418,343 @@
       </div>
     </div>
 
+    <!-- Analytics Tab -->
+    <div id="analytics" class="tab-content">
+      <style>
+        .an-filter-bar {
+          display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+          background: var(--bg-panel); padding: 14px 16px; border-radius: 10px;
+          box-shadow: var(--shadow); margin-bottom: 18px;
+        }
+        .an-filter-group { display: flex; flex-direction: column; gap: 3px; min-width: 140px; }
+        .an-filter-group label { font-size: .68rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+        .an-filter-group select {
+          padding: 7px 10px; border: 1.5px solid var(--border); border-radius: 6px;
+          font-size: .82rem; background: var(--bg-panel-alt); outline: none;
+        }
+        .an-filter-group select:focus { border-color: var(--bank-blue-lt); }
+        .an-apply-btn {
+          padding: 8px 18px; background: var(--bank-blue); color: #fff;
+          border: none; border-radius: 6px; font-size: .82rem; font-weight: 600;
+          cursor: pointer; align-self: flex-end;
+        }
+        .an-apply-btn:hover { background: var(--bank-blue-lt); }
+        .an-reset-btn {
+          padding: 8px 14px; background: transparent; color: var(--text-muted);
+          border: 1.5px solid var(--border); border-radius: 6px; font-size: .82rem;
+          font-weight: 600; cursor: pointer; align-self: flex-end;
+        }
+        .an-reset-btn:hover { background: var(--bg-panel-alt); }
+        .kpi-row {
+          display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+          margin-bottom: 18px;
+        }
+        .kpi-card {
+          background: var(--bg-panel); border-radius: 10px; padding: 16px 18px;
+          box-shadow: var(--shadow); border-left: 4px solid var(--bank-blue-lt);
+        }
+        .kpi-card.kpi-green  { border-left-color: var(--success); }
+        .kpi-card.kpi-gold   { border-left-color: var(--bank-gold-dk); }
+        .kpi-card.kpi-red    { border-left-color: var(--error); }
+        .kpi-label { font-size: .7rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+        .kpi-value { font-size: 1.9rem; font-weight: 800; color: var(--text-main); line-height: 1.1; margin-top: 4px; }
+        .kpi-sub   { font-size: .7rem; color: var(--text-light); margin-top: 3px; }
+        .charts-row {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+          margin-bottom: 16px;
+        }
+        .charts-row-3 {
+          display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;
+          margin-bottom: 16px;
+        }
+        .chart-card {
+          background: var(--bg-panel); border-radius: 10px; padding: 16px 18px;
+          box-shadow: var(--shadow);
+        }
+        .chart-card-full {
+          background: var(--bg-panel); border-radius: 10px; padding: 16px 18px;
+          box-shadow: var(--shadow); margin-bottom: 16px;
+        }
+        .chart-title {
+          font-size: .82rem; font-weight: 700; color: var(--bank-blue);
+          margin-bottom: 12px; padding-bottom: 8px;
+          border-bottom: 2px solid var(--bank-blue); display: inline-block;
+        }
+        .an-loading {
+          display: flex; align-items: center; justify-content: center;
+          height: 200px; color: var(--text-muted); font-size: .88rem; gap: 8px;
+        }
+        .an-spinner {
+          width: 20px; height: 20px; border: 2px solid var(--border);
+          border-top-color: var(--bank-blue-lt); border-radius: 50%;
+          animation: spin .8s linear infinite;
+        }
+        @media (max-width: 900px) {
+          .kpi-row { grid-template-columns: repeat(2, 1fr); }
+          .charts-row, .charts-row-3 { grid-template-columns: 1fr; }
+        }
+      </style>
+
+      <!-- Filter Bar -->
+      <div class="an-filter-bar">
+        <div class="an-filter-group">
+          <label>Province</label>
+          <select id="an-province">
+            <option value="">All Provinces</option>
+          </select>
+        </div>
+        <div class="an-filter-group">
+          <label>Gender</label>
+          <select id="an-gender">
+            <option value="">All</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="O">Other</option>
+            <option value="C">Company</option>
+          </select>
+        </div>
+        <div class="an-filter-group">
+          <label>Merchant Status</label>
+          <select id="an-merchant">
+            <option value="">All</option>
+            <option value="true">Confirmed Merchant</option>
+            <option value="null">CBS / Unclassified</option>
+            <option value="false">Non-Merchant</option>
+          </select>
+        </div>
+        <button class="an-apply-btn" onclick="loadAnalytics()">Apply</button>
+        <button class="an-reset-btn" onclick="resetAnalyticsFilters()">Reset</button>
+        <span id="an-loading-hint" style="font-size:.75rem;color:var(--text-muted);align-self:center;display:none;">Loading...</span>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="kpi-row" id="an-kpis">
+        <div class="kpi-card"><div class="an-loading"><div class="an-spinner"></div></div></div>
+        <div class="kpi-card kpi-green"><div class="an-loading"><div class="an-spinner"></div></div></div>
+        <div class="kpi-card kpi-gold"><div class="an-loading"><div class="an-spinner"></div></div></div>
+        <div class="kpi-card kpi-red"><div class="an-loading"><div class="an-spinner"></div></div></div>
+      </div>
+
+      <!-- Row 1: Monthly Trend + Merchant Status Donut -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-title">Monthly Report Trend</div>
+          <canvas id="an-chart-trend" height="180"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Channel Mix (per Report)</div>
+          <canvas id="an-chart-channel" height="180"></canvas>
+        </div>
+      </div>
+
+      <!-- Row 2: Gender + Province -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-title">Gender Distribution</div>
+          <canvas id="an-chart-gender" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Province-wise Merchants</div>
+          <canvas id="an-chart-province" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- Row 3: Age Groups + Merchant Status + District -->
+      <div class="charts-row-3">
+        <div class="chart-card">
+          <div class="chart-title">Age Group Distribution</div>
+          <canvas id="an-chart-age" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Merchant Status</div>
+          <canvas id="an-chart-status" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Top Districts</div>
+          <canvas id="an-chart-district" height="200"></canvas>
+        </div>
+      </div>
+
+    </div><!-- /analytics tab -->
+
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script>
+    // ── Analytics state ───────────────────────────────────────
+    const _anCharts = {};
+    let _anInitialized = false;
+
+    function destroyChart(id) {
+      if (_anCharts[id]) { _anCharts[id].destroy(); delete _anCharts[id]; }
+    }
+
+    function makeChart(id, config) {
+      destroyChart(id);
+      const ctx = document.getElementById(id);
+      if (!ctx) return;
+      _anCharts[id] = new Chart(ctx, config);
+    }
+
+    const AN_COLORS = {
+      blue:   '#2563c0', blueAlpha: 'rgba(37,99,192,.75)',
+      green:  '#16a34a', greenAlpha: 'rgba(22,163,74,.75)',
+      gold:   '#d97706', goldAlpha:  'rgba(217,119,6,.75)',
+      red:    '#dc2626', redAlpha:   'rgba(220,38,38,.75)',
+      purple: '#7c3aed', purpleAlpha:'rgba(124,58,237,.75)',
+      teal:   '#0d9488',
+    };
+    const PIE_PALETTE = ['#2563c0','#16a34a','#d97706','#dc2626','#7c3aed','#0d9488','#db2777','#ea580c'];
+
+    function renderAnalytics(d) {
+      // KPIs
+      const kpiEl = document.getElementById('an-kpis');
+      kpiEl.innerHTML = `
+        <div class="kpi-card">
+          <div class="kpi-label">Total CBS Records</div>
+          <div class="kpi-value">${d.kpis.total.toLocaleString()}</div>
+          <div class="kpi-sub">In filtered view</div>
+        </div>
+        <div class="kpi-card kpi-green">
+          <div class="kpi-label">Confirmed Merchants</div>
+          <div class="kpi-value">${d.kpis.confirmed.toLocaleString()}</div>
+          <div class="kpi-sub">${d.kpis.total ? Math.round(d.kpis.confirmed/d.kpis.total*100) : 0}% of total</div>
+        </div>
+        <div class="kpi-card kpi-gold">
+          <div class="kpi-label">CBS / Unclassified</div>
+          <div class="kpi-value">${d.kpis.unconfirmed.toLocaleString()}</div>
+          <div class="kpi-sub">Awaiting classification</div>
+        </div>
+        <div class="kpi-card kpi-red">
+          <div class="kpi-label">Reports Generated</div>
+          <div class="kpi-value">${d.kpis.reports}</div>
+          <div class="kpi-sub">Verified & completed</div>
+        </div>`;
+
+      // Monthly Trend
+      makeChart('an-chart-trend', {
+        type: 'line',
+        data: {
+          labels: d.trend.labels,
+          datasets: [
+            { label: 'Total Merchants', data: d.trend.total,    borderColor: AN_COLORS.blue,   backgroundColor: 'rgba(37,99,192,.08)', tension: .35, fill: true, pointRadius: 4 },
+          ]
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true } } }
+      });
+
+      // Channel Mix (stacked bar)
+      makeChart('an-chart-channel', {
+        type: 'bar',
+        data: {
+          labels: d.trend.labels,
+          datasets: [
+            { label: 'FonePay',  data: d.trend.fonepay,  backgroundColor: AN_COLORS.blueAlpha },
+            { label: 'NepalPay', data: d.trend.nepalpay, backgroundColor: AN_COLORS.greenAlpha },
+            { label: 'Invalid',  data: d.trend.invalid,  backgroundColor: AN_COLORS.redAlpha },
+          ]
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom' } }, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+      });
+
+      // Gender Pie
+      const gData = d.gender.data.filter((_,i) => d.gender.data[i] > 0 || d.gender.labels[i] !== 'Unknown');
+      makeChart('an-chart-gender', {
+        type: 'doughnut',
+        data: { labels: d.gender.labels, datasets: [{ data: d.gender.data, backgroundColor: PIE_PALETTE, borderWidth: 2 }] },
+        options: { responsive: true, plugins: { legend: { position: 'right' } } }
+      });
+
+      // Province Horizontal Bar
+      makeChart('an-chart-province', {
+        type: 'bar',
+        data: {
+          labels: d.province.labels,
+          datasets: [{ label: 'Merchants', data: d.province.data, backgroundColor: AN_COLORS.blueAlpha, borderColor: AN_COLORS.blue, borderWidth: 1 }]
+        },
+        options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
+      });
+
+      // Age Groups
+      makeChart('an-chart-age', {
+        type: 'bar',
+        data: {
+          labels: d.age.labels,
+          datasets: [{ label: 'Count', data: d.age.data, backgroundColor: PIE_PALETTE, borderRadius: 4 }]
+        },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+      });
+
+      // Merchant Status Donut
+      makeChart('an-chart-status', {
+        type: 'doughnut',
+        data: { labels: d.merchant_status.labels, datasets: [{ data: d.merchant_status.data, backgroundColor: [AN_COLORS.green, AN_COLORS.gold, AN_COLORS.red], borderWidth: 2 }] },
+        options: { responsive: true, plugins: { legend: { position: 'right' } } }
+      });
+
+      // District Bar
+      makeChart('an-chart-district', {
+        type: 'bar',
+        data: {
+          labels: d.district.labels,
+          datasets: [{ label: 'Merchants', data: d.district.data, backgroundColor: AN_COLORS.purpleAlpha, borderColor: AN_COLORS.purple, borderWidth: 1 }]
+        },
+        options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
+      });
+    }
+
+    function loadAnalytics() {
+      const hint = document.getElementById('an-loading-hint');
+      hint.style.display = 'inline';
+      const params = new URLSearchParams({
+        province:    document.getElementById('an-province').value,
+        gender:      document.getElementById('an-gender').value,
+        is_merchant: document.getElementById('an-merchant').value,
+      });
+      fetch(`{% url 'analytics_api' %}?${params}`)
+        .then(r => r.json())
+        .then(d => {
+          // Populate province dropdown on first load
+          if (!_anInitialized) {
+            const sel = document.getElementById('an-province');
+            const current = sel.value;
+            while (sel.options.length > 1) sel.remove(1);
+            d.filter_options.provinces.forEach(p => {
+              const opt = document.createElement('option');
+              opt.value = p; opt.textContent = p;
+              if (p === current) opt.selected = true;
+              sel.appendChild(opt);
+            });
+            _anInitialized = true;
+          }
+          renderAnalytics(d);
+          hint.style.display = 'none';
+        })
+        .catch(() => { hint.style.display = 'none'; });
+    }
+
+    function resetAnalyticsFilters() {
+      document.getElementById('an-province').value    = '';
+      document.getElementById('an-gender').value      = '';
+      document.getElementById('an-merchant').value    = '';
+      loadAnalytics();
+    }
+
+    let _anLoaded = false;
+    function initAnalytics() {
+      if (!_anLoaded) { _anLoaded = true; loadAnalytics(); }
+    }
+
+    function confirmDeleteUser(btn) {
+      const form = btn.closest('form');
+      const username = form.dataset.username;
+      showConfirm(
+        'User "' + username + '" will be permanently removed and cannot be recovered.',
+        () => form.submit(),
+        { title: 'Delete user?', danger: true, okLabel: 'Delete' }
+      );
+    }
+
     function switchTab(e, tabName) {
       e.preventDefault();
 
@@ -442,7 +778,7 @@
       const is_admin = document.getElementById('is_admin').checked;
 
       if (!username) {
-        alert('Username is required');
+        showToast('Username is required', 'warning');
         return;
       }
 
@@ -462,15 +798,25 @@
     // Restore tab from hash on page load
     window.addEventListener('load', function() {
       const hash = window.location.hash.slice(1);
-      if (hash === 'users' || hash === 'logs') {
-        const btn = Array.from(document.querySelectorAll('.admin-tab')).find(el =>
-          (hash === 'logs' && el.textContent.includes('Activity')) ||
-          (hash === 'users' && el.textContent.includes('Users'))
-        );
-        if (btn) btn.click();
-      }
+      const btn = Array.from(document.querySelectorAll('.admin-tab')).find(el =>
+        (hash === 'logs'      && el.textContent.includes('Activity')) ||
+        (hash === 'users'     && el.textContent.includes('Users'))    ||
+        (hash === 'clean-data'&& el.textContent.includes('Clean'))    ||
+        (hash === 'analytics' && el.textContent.includes('Analytics'))
+      );
+      if (btn) btn.click();
     });
   </script>
+
+{% if messages %}
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    {% for msg in messages %}
+      showToast("{{ msg|escapejs }}", "{% if msg.tags == 'error' %}error{% elif msg.tags == 'warning' %}warning{% elif msg.tags == 'success' %}success{% else %}info{% endif %}");
+    {% endfor %}
+  });
+</script>
+{% endif %}
 
 </body>
 </html>

@@ -1,3 +1,4 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Merchant Report Generator — JBBL</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+    <script src="{% static 'merchant/js/ui.js' %}" defer></script>
     <style>
         :root {
             --blue: #1B5C99;
@@ -297,16 +300,15 @@
         <h2>Upload Data</h2>
         <p class="sub">Upload the consolidated Excel file containing FonePay and NepalPay sheets.</p>
         
-        <div class="msg-container">
-            {% if messages %}
-                {% for message in messages %}
-                <div class="msg {{ message.tags }}">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    <span>{{ message }}</span>
-                </div>
-                {% endfor %}
-            {% endif %}
-        </div>
+        {% if messages %}
+        <script>
+          document.addEventListener('DOMContentLoaded', function () {
+            {% for message in messages %}
+              showToast("{{ message|escapejs }}", "{% if message.tags == 'error' %}error{% elif message.tags == 'warning' %}warning{% elif message.tags == 'success' %}success{% else %}info{% endif %}");
+            {% endfor %}
+          });
+        </script>
+        {% endif %}
 
         <form id="uploadForm">
             {% csrf_token %}
@@ -803,7 +805,7 @@
             console.log('All files selected:', allSelected);
 
             if (!allSelected) {
-                alert('Please select all required files.');
+                showToast('Please select all required files.', 'warning');
                 return;
             }
 
@@ -813,7 +815,7 @@
             console.log('All valid:', allValid, 'Validation state:', validationState);
 
             if (!allValid) {
-                alert('Please fix all file validation errors before proceeding. Each file must pass validation.');
+                showToast('Please fix all file validation errors before proceeding.', 'warning');
                 return;
             }
 
@@ -833,11 +835,11 @@
             fetch('/api/start/', { method: 'POST', body: fd })
             .then(r => r.json())
             .then(data => {
-                if (data.error) { alert(data.error); goBtn.disabled = false; goBtn.innerHTML = 'Proceed'; return; }
+                if (data.error) { showToast(data.error, 'error'); goBtn.disabled = false; goBtn.innerHTML = 'Proceed'; return; }
                 uid = data.unique_id;
                 pollTimer = setInterval(pollProgress, 600);
             })
-            .catch(err => { alert('Failed: ' + err); goBtn.disabled = false; goBtn.innerHTML = 'Proceed'; });
+            .catch(err => { showToast('Failed: ' + err, 'error'); goBtn.disabled = false; goBtn.innerHTML = 'Proceed'; });
         });
     }
 
@@ -911,7 +913,7 @@
                         fetch('/api/finalize/' + uid + '/?skip_review=1')
                             .then(r => r.json())
                             .then(res => {
-                                if (res.status === 'error') { alert('Error: ' + res.detail); return; }
+                                if (res.status === 'error') { showToast('Error: ' + res.detail, 'error'); return; }
                                 // Report is generating in the background — resume polling
                                 pollTimer = setInterval(pollProgress, 800);
                             });
@@ -932,7 +934,7 @@
         }
         else if (status === 'error') {
             clearInterval(pollTimer);
-            alert('Error: ' + d.detail);
+            showToast('Error: ' + d.detail, 'error');
             goBtn.disabled = false; goBtn.innerHTML = 'Proceed';
         }
     }

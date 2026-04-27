@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Review Missing Data</title>
     <link rel="stylesheet" href="{% static 'merchant/css/dashboard.css' %}">
+  <script src="{% static 'merchant/js/ui.js' %}" defer></script>
     <style>
         .review-page { max-width: 1200px; margin: 32px auto; padding: 0 24px 48px; }
         .review-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -515,16 +516,21 @@ async function aiClassifyGeo() {
 }
 
 function removeRow(acc) {
-    if (confirm('Are you sure you want to remove this record from the report?')) {
-        const row = document.getElementById('row-' + acc);
-        const delInput = document.getElementById('delete-' + acc);
-        if (row && delInput) {
-            row.style.opacity = '0.4';
-            row.style.pointerEvents = 'none';
-            row.style.textDecoration = 'line-through';
-            delInput.value = 'true';
-        }
-    }
+    showConfirm(
+        'This account will be excluded from the report. You can still see it in the list (greyed out).',
+        () => {
+            const row = document.getElementById('row-' + acc);
+            const delInput = document.getElementById('delete-' + acc);
+            if (row && delInput) {
+                row.style.opacity = '0.4';
+                row.style.pointerEvents = 'none';
+                row.style.textDecoration = 'line-through';
+                delInput.value = 'true';
+            }
+            showToast('Record removed from report.', 'info');
+        },
+        { title: 'Remove from report?', okLabel: 'Remove', danger: true }
+    );
 }
 
 function getCookie(name) {

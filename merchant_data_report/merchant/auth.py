@@ -200,11 +200,11 @@ def admin_user_create(request):
 
     if not username:
         messages.error(request, 'Username is required.')
-        return redirect('admin_logs')
+        return redirect('/admin/#users')
 
     if SystemUser.objects.filter(username=username).exists():
         messages.error(request, 'Username already exists.')
-        return redirect('admin_logs')
+        return redirect('/admin/#users')
 
     # Generate password
     raw_password = SystemUser.generate_password()
@@ -221,7 +221,7 @@ def admin_user_create(request):
 
     log_activity(request, 'USER_CREATE', f'Created user {username}')
     messages.success(request, f'User {username} created successfully.')
-    return redirect('admin_logs')
+    return redirect('/admin/#users')
 
 
 @admin_required
@@ -236,7 +236,7 @@ def admin_user_toggle_admin(request, pk):
     # Protect primary admin
     if user.username == 'admin':
         messages.error(request, 'Cannot modify the primary admin account.')
-        return redirect('admin_logs')
+        return redirect('/admin/#users')
 
     user.is_admin = not user.is_admin
     user.save(update_fields=['is_admin'])
@@ -247,7 +247,7 @@ def admin_user_toggle_admin(request, pk):
 
     role_text = 'Admin' if user.is_admin else 'User'
     messages.success(request, f'{user.username} is now a {role_text}.')
-    return redirect('admin_logs')
+    return redirect('/admin/#users')
 
 
 @admin_required
@@ -262,7 +262,7 @@ def admin_user_toggle_active(request, pk):
     # Protect primary admin
     if user.username == 'admin':
         messages.error(request, 'Cannot deactivate the primary admin account.')
-        return redirect('admin_logs')
+        return redirect('/admin/#users')
 
     user.is_active = not user.is_active
     user.save(update_fields=['is_active'])
@@ -273,7 +273,7 @@ def admin_user_toggle_active(request, pk):
 
     status_text = 'deactivated' if not user.is_active else 'reactivated'
     messages.success(request, f'{user.username} has been {status_text}.')
-    return redirect('admin_logs')
+    return redirect('/admin/#users')
 
 
 @admin_required
@@ -288,7 +288,7 @@ def admin_user_reset_password(request, pk):
     # Protect primary admin from password reset
     if user.username == 'admin':
         messages.error(request, 'Cannot reset password for the primary admin account.')
-        return redirect('admin_logs')
+        return redirect('/admin/#users')
 
     # Generate new password
     raw_password = SystemUser.generate_password()
@@ -300,7 +300,7 @@ def admin_user_reset_password(request, pk):
 
     log_activity(request, 'PASSWORD_RESET', f'Password reset for {user.username}')
     messages.success(request, f'Password reset for {user.username}.')
-    return redirect('admin_logs')
+    return redirect('/admin/#users')
 
 
 @admin_required
@@ -315,14 +315,14 @@ def admin_user_delete(request, pk):
     # Protect primary admin from deletion
     if user.username == 'admin':
         messages.error(request, 'Cannot delete the primary admin account.')
-        return redirect('admin_logs')
+        return redirect('/admin/#users')
 
     username = user.username
     user.delete()
 
-    log_activity(request, 'USER_CREATE', f'Deleted user {username}')
-    messages.success(request, f'{username} has been deleted.')
-    return redirect('admin_logs')
+    log_activity(request, 'USER_DELETE', f'Deleted user {username}')
+    messages.error(request, f'{username} has been deleted.')
+    return redirect('/admin/#users')
 
 
 @login_required_custom

@@ -167,70 +167,28 @@ def _seed_missing_cbs(accounts):
     return 0
 
 
-def _ensure_clean_cbs_users(accounts):
-    """
-    Sync CBS data into CleanCBS for the given accounts.
-    Only accounts known to CBS get a CleanCBS record — no empty shells.
-    Uses cbs_lookup() so this is ready for the API swap.
-    """
-    accs = [a for a in accounts if a and str(a).strip()]
-    if not accs:
-        return
-
-    existing = set()
-    for chunk in _chunked(accs):
-        existing.update(CleanCBS.objects.filter(account_number__in=chunk).values_list('account_number', flat=True))
-
-    new_accs = [a for a in accs if a not in existing]
-    if not new_accs:
-        return
-
-    # Single CBS source call — swap cbs_lookup() for API when ready
-    cbs_map = cbs_lookup(new_accs)
-
-    to_create = []
-    for acc in new_accs:
-        r = cbs_map.get(acc)
-        if not r:
-            continue   # not in CBS → skip, will appear in manual review
-        to_create.append(CleanCBS(
-            account_number=acc,
-            gender=r['gender'] or '',
-            dob=r['dob'],
-            country_code=r['country_code'],
-        ))
-    for chunk in _chunked(to_create):
-        CleanCBS.objects.bulk_create(chunk, ignore_conflicts=True)
-
-
 def enrich_users(rows, auto_seed=True):
-    """Fill missing gender/country_code/dob from CleanCBS.
+    """Fill missing gender/country_code/dob from CBS source directly.
 
-    Resolution order per field: file value → CleanCBS value → left as None.
-    CBSMerchant is seeded first (mock in dev), then data is copied to CleanCBS.
-    All reads come from CleanCBS so the bank's table is never written to.
+    Resolution order per field: file value → CBS value → left as None.
+    Does NOT write anything to CleanCBS — that table is for confirmed merchants
+    only (is_merchant=True, province+district+municipality required).
     """
     accounts = sorted({r['account'] for r in rows if r['account']})
-    if auto_seed:
-        _seed_missing_cbs(accounts)
-    _ensure_clean_cbs_users(accounts)
 
-    cbs_lookup = {}
-    for chunk in _chunked(accounts):
-        for r in (CleanCBS.objects.filter(account_number__in=chunk)
-                  .only('account_number', 'gender', 'dob', 'country_code')):
-            cbs_lookup[r.account_number] = r
+    # Look up CBS data directly — no CleanCBS writes
+    cbs_map = cbs_lookup(accounts) if accounts else {}
 
     for r in rows:
         acc = r['account']
-        cbs = cbs_lookup.get(acc) if acc else None
+        cbs = cbs_map.get(acc) if acc else None
         if cbs:
             if not r['gender']:
-                r['gender'] = cbs.gender
+                r['gender'] = cbs.get('gender') or ''
             if not r['country_code']:
-                r['country_code'] = cbs.country_code
+                r['country_code'] = cbs.get('country_code') or ''
             if not r['dob']:
-                r['dob'] = cbs.dob
+                r['dob'] = cbs.get('dob')
             r['in_cbs'] = True
         else:
             r['in_cbs'] = False
