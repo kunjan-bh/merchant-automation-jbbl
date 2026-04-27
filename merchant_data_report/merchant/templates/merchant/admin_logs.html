@@ -509,17 +509,7 @@
             <option value="">All</option>
             <option value="M">Male</option>
             <option value="F">Female</option>
-            <option value="O">Other</option>
             <option value="C">Company</option>
-          </select>
-        </div>
-        <div class="an-filter-group">
-          <label>Merchant Status</label>
-          <select id="an-merchant">
-            <option value="">All</option>
-            <option value="true">Confirmed Merchant</option>
-            <option value="null">CBS / Unclassified</option>
-            <option value="false">Non-Merchant</option>
           </select>
         </div>
         <button class="an-apply-btn" onclick="loadAnalytics()">Apply</button>
@@ -559,15 +549,11 @@
         </div>
       </div>
 
-      <!-- Row 3: Age Groups + Merchant Status + District -->
-      <div class="charts-row-3">
+      <!-- Row 3: Age Groups + District -->
+      <div class="charts-row">
         <div class="chart-card">
           <div class="chart-title">Age Group Distribution</div>
           <canvas id="an-chart-age" height="200"></canvas>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Merchant Status</div>
-          <canvas id="an-chart-status" height="200"></canvas>
         </div>
         <div class="chart-card">
           <div class="chart-title">Top Districts</div>
@@ -611,24 +597,24 @@
       const kpiEl = document.getElementById('an-kpis');
       kpiEl.innerHTML = `
         <div class="kpi-card">
-          <div class="kpi-label">Total CBS Records</div>
+          <div class="kpi-label">Total Merchants</div>
           <div class="kpi-value">${d.kpis.total.toLocaleString()}</div>
           <div class="kpi-sub">In filtered view</div>
         </div>
         <div class="kpi-card kpi-green">
-          <div class="kpi-label">Confirmed Merchants</div>
-          <div class="kpi-value">${d.kpis.confirmed.toLocaleString()}</div>
-          <div class="kpi-sub">${d.kpis.total ? Math.round(d.kpis.confirmed/d.kpis.total*100) : 0}% of total</div>
+          <div class="kpi-label">Male</div>
+          <div class="kpi-value">${d.kpis.male.toLocaleString()}</div>
+          <div class="kpi-sub">${d.kpis.total ? Math.round(d.kpis.male/d.kpis.total*100) : 0}% of total</div>
         </div>
         <div class="kpi-card kpi-gold">
-          <div class="kpi-label">CBS / Unclassified</div>
-          <div class="kpi-value">${d.kpis.unconfirmed.toLocaleString()}</div>
-          <div class="kpi-sub">Awaiting classification</div>
+          <div class="kpi-label">Female</div>
+          <div class="kpi-value">${d.kpis.female.toLocaleString()}</div>
+          <div class="kpi-sub">${d.kpis.total ? Math.round(d.kpis.female/d.kpis.total*100) : 0}% of total</div>
         </div>
         <div class="kpi-card kpi-red">
-          <div class="kpi-label">Reports Generated</div>
-          <div class="kpi-value">${d.kpis.reports}</div>
-          <div class="kpi-sub">Verified & completed</div>
+          <div class="kpi-label">Verified Report Periods</div>
+          <div class="kpi-value">${d.kpis.months_with_data}</div>
+          <div class="kpi-sub">Officer-verified batches</div>
         </div>`;
 
       // Monthly Trend
@@ -685,13 +671,6 @@
         options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
       });
 
-      // Merchant Status Donut
-      makeChart('an-chart-status', {
-        type: 'doughnut',
-        data: { labels: d.merchant_status.labels, datasets: [{ data: d.merchant_status.data, backgroundColor: [AN_COLORS.green, AN_COLORS.gold, AN_COLORS.red], borderWidth: 2 }] },
-        options: { responsive: true, plugins: { legend: { position: 'right' } } }
-      });
-
       // District Bar
       makeChart('an-chart-district', {
         type: 'bar',
@@ -707,9 +686,8 @@
       const hint = document.getElementById('an-loading-hint');
       hint.style.display = 'inline';
       const params = new URLSearchParams({
-        province:    document.getElementById('an-province').value,
-        gender:      document.getElementById('an-gender').value,
-        is_merchant: document.getElementById('an-merchant').value,
+        province: document.getElementById('an-province').value,
+        gender:   document.getElementById('an-gender').value,
       });
       fetch(`{% url 'analytics_api' %}?${params}`)
         .then(r => r.json())
@@ -734,9 +712,8 @@
     }
 
     function resetAnalyticsFilters() {
-      document.getElementById('an-province').value    = '';
-      document.getElementById('an-gender').value      = '';
-      document.getElementById('an-merchant').value    = '';
+      document.getElementById('an-province').value = '';
+      document.getElementById('an-gender').value   = '';
       loadAnalytics();
     }
 

@@ -3142,35 +3142,31 @@ def analytics_api(request):
 
     province_filter = request.GET.get('province', '').strip()
     gender_filter   = request.GET.get('gender', '').strip()
-    merchant_filter = request.GET.get('is_merchant', '').strip()
 
     qs = CleanCBS.objects.all()
     if province_filter:
         qs = qs.filter(province__iexact=province_filter)
-    if gender_filter:
+    if gender_filter == 'C':
+        from django.db.models import Q
+        qs = qs.exclude(gender__in=['M', 'F'])
+    elif gender_filter:
         qs = qs.filter(gender=gender_filter)
-    if merchant_filter == 'true':
-        qs = qs.filter(is_merchant=True)
-    elif merchant_filter == 'false':
-        qs = qs.filter(is_merchant=False)
-    elif merchant_filter == 'null':
-        qs = qs.filter(is_merchant__isnull=True)
 
-    records = list(qs.values('gender', 'province', 'district', 'dob', 'is_merchant'))
+    records = list(qs.values('gender', 'province', 'district', 'dob'))
 
     # ── KPIs ──────────────────────────────────────────────────
     total = len(records)
-    confirmed = sum(1 for r in records if r['is_merchant'] is True)
-    unconfirmed = sum(1 for r in records if r['is_merchant'] is None)
-    non_merchant = sum(1 for r in records if r['is_merchant'] is False)
 
-    # ── Gender distribution ────────────────────────────────────
-    gender_map = {'M': 'Male', 'F': 'Female', 'O': 'Other', 'C': 'Company'}
-    gender_counts = {'Male': 0, 'Female': 0, 'Other': 0, 'Company': 0, 'Unknown': 0}
+    # ── Gender distribution (M=Male, F=Female, all else=Company) ──
+    gender_counts = {'Male': 0, 'Female': 0, 'Company': 0}
     for r in records:
-        g = r.get('gender') or ''
-        label = gender_map.get(g.upper(), 'Unknown')
-        gender_counts[label] += 1
+        g = (r.get('gender') or '').strip().upper()
+        if g == 'M':
+            gender_counts['Male'] += 1
+        elif g == 'F':
+            gender_counts['Female'] += 1
+        else:
+            gender_counts['Company'] += 1
 
     # ── Province distribution ──────────────────────────────────
     province_counts = {}
@@ -3209,24 +3205,23 @@ def analytics_api(request):
         except Exception:
             age_buckets['Unknown'] += 1
 
-    # ── Is-merchant status ─────────────────────────────────────
-    merchant_status = {
-        'Confirmed Merchant': confirmed,
-        'CBS / Unclassified': unconfirmed,
-        'Non-Merchant': non_merchant,
-    }
-
     # ── Monthly trend from ReportBatch ────────────────────────
     MONTH_ORDER = [
         'Baisakh', 'Jestha', 'Ashadh', 'Shrawan', 'Bhadra', 'Ashwin',
         'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra',
     ]
-    batches = list(
-        ReportBatch.objects.filter(status='completed', verified=True)
+    all_batches = list(
+        ReportBatch.objects.filter(verified=True)
         .values('month', 'year', 'total_records', 'fonepay_count', 'nepalpay_count',
-                'invalid_account_count', 'merged_cbs_count')
-        .order_by('year', 'month')
+                'invalid_account_count', 'merged_cbs_count', 'id')
     )
+    # Keep only the latest run per month (highest id)
+    seen = {}
+    for b in all_batches:
+        key = (b['year'], b['month'])
+        if key not in seen or b['id'] > seen[key]['id']:
+            seen[key] = b
+    batches = list(seen.values())
 
     def month_sort_key(b):
         try:
@@ -3252,10 +3247,9 @@ def analytics_api(request):
     return JsonResponse({
         'kpis': {
             'total': total,
-            'confirmed': confirmed,
-            'unconfirmed': unconfirmed,
-            'non_merchant': non_merchant,
-            'reports': len(batches),
+            'male': gender_counts['Male'],
+            'female': gender_counts['Female'],
+            'months_with_data': len(batches),
         },
         'gender': {
             'labels': list(gender_counts.keys()),
@@ -3273,10 +3267,6 @@ def analytics_api(request):
             'labels': list(age_buckets.keys()),
             'data':   list(age_buckets.values()),
         },
-        'merchant_status': {
-            'labels': list(merchant_status.keys()),
-            'data':   list(merchant_status.values()),
-        },
         'trend': {
             'labels':   trend_labels,
             'total':    trend_total,
@@ -3288,9 +3278,8 @@ def analytics_api(request):
             'provinces': all_provinces,
         },
         'active_filters': {
-            'province':    province_filter,
-            'gender':      gender_filter,
-            'is_merchant': merchant_filter,
+            'province': province_filter,
+            'gender':   gender_filter,
         },
     })
 
