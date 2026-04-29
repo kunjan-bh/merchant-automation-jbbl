@@ -786,11 +786,23 @@
   </script>
 
 {% if messages %}
+<script type="application/json" id="flash-messages">
+[
+  {% for msg in messages %}
+    {"text": "{{ msg|escapejs }}", "tag": "{{ msg.tags|default:'info' }}"}{% if not forloop.last %},{% endif %}
+  {% endfor %}
+]
+</script>
 <script>
   document.addEventListener('DOMContentLoaded', function () {
-    {% for msg in messages %}
-      showToast("{{ msg|escapejs }}", "{% if msg.tags == 'error' %}error{% elif msg.tags == 'warning' %}warning{% elif msg.tags == 'success' %}success{% else %}info{% endif %}");
-    {% endfor %}
+    var el = document.getElementById('flash-messages');
+    if (!el) return;
+    try {
+      JSON.parse(el.textContent).forEach(function (m) {
+        var type = m.tag === 'error' || m.tag === 'warning' || m.tag === 'success' ? m.tag : 'info';
+        showToast(m.text, type);
+      });
+    } catch (e) {}
   });
 </script>
 {% endif %}

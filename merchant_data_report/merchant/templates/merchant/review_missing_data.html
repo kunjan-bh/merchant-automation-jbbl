@@ -471,13 +471,18 @@ async function aiClassifyGeo() {
 
             const data = await resp.json();
             if (!resp.ok || data.error) {
-                status.textContent = `✗ Error on batch ${b + 1}: ` + (data.error || resp.statusText);
+                showToast('AI assist is not available right now.', 'warning');
+                status.textContent = '✗ AI assist unavailable. Please fill values manually.';
                 btn.disabled = false;
                 btn.textContent = '✦ Re-classify';
                 progressWrap.style.display = 'none';
                 return;
             }
             Object.assign(allResults, data.results || {});
+            if (data.ai_unavailable) {
+                showToast(data.ai_message || 'AI assist is not available right now.', 'warning');
+                status.textContent = '⚠ AI assist unavailable. Address-based classification was applied where possible.';
+            }
 
             // Pace: 1 batch every 3s → max ~20 batches/min × 1450 tokens = ~29K tokens/min, under 30K limit
             if (b < totalBatches - 1) await new Promise(r => setTimeout(r, 3000));

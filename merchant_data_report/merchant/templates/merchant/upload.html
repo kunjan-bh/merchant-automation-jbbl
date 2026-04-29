@@ -301,11 +301,23 @@
         <p class="sub">Upload the consolidated Excel file containing FonePay and NepalPay sheets.</p>
         
         {% if messages %}
+        <script type="application/json" id="flash-messages">
+        [
+          {% for message in messages %}
+            {"text": "{{ message|escapejs }}", "tag": "{{ message.tags|default:'info' }}"}{% if not forloop.last %},{% endif %}
+          {% endfor %}
+        ]
+        </script>
         <script>
           document.addEventListener('DOMContentLoaded', function () {
-            {% for message in messages %}
-              showToast("{{ message|escapejs }}", "{% if message.tags == 'error' %}error{% elif message.tags == 'warning' %}warning{% elif message.tags == 'success' %}success{% else %}info{% endif %}");
-            {% endfor %}
+            var el = document.getElementById('flash-messages');
+            if (!el) return;
+            try {
+              JSON.parse(el.textContent).forEach(function (m) {
+                var type = m.tag === 'error' || m.tag === 'warning' || m.tag === 'success' ? m.tag : 'info';
+                showToast(m.text, type);
+              });
+            } catch (e) {}
           });
         </script>
         {% endif %}

@@ -81,60 +81,87 @@ def check_missing_records(df, required_cols, index_col):
     missing_dict = {}
     if df is None or df.empty or not index_col:
         return missing_dict
-    for _, row in df.iterrows():
-        acc = str(row.get(index_col)).strip()
-        if not acc or is_empty(acc): continue
 
-        missing = []
-        for c in required_cols:
-            val = row.get(c)
-            # Re-use mappers below to ensure non-empty strings are actually valid.
-            if is_empty(val):
-                missing.append(c)
-            elif c == 'province' and map_province(val) == 'Unmatched':
-                missing.append(c)
-            elif c == 'district' and map_district(val) == 'Unmatched':
-                missing.append(c)
-            elif c == 'municipality' and map_local(val) == 'Unmatched':
-                missing.append(c)
+    # Drop invalid-format rows before any processing.
+    # Excel I/O turns the bool column into a string ("True"/"False") when dtype=str
+    # is used on read, so handle both bool and string cases.
+    if '_invalid_format' in df.columns:
+        s = df['_invalid_format']
+        invalid_mask = s.apply(
+            lambda v: (v is True) or (str(v).strip().lower() in ('true', '1'))
+        )
+        df = df[~invalid_mask].copy()
 
-        # Gender is graded separately — junk values (e.g. CBS Cust IDs leaking
-        # in from a misaligned NepalPay export) flag the dropdown on rows
-        # already being reviewed for other reasons. Don't promote a row into
-        # review just for gender — that would balloon the review queue.
-        gender_invalid = not _is_valid_gender(row.get('gender'))
+    if df.empty:
+        return missing_dict
 
-        if missing or row.get('_invalid_format') == True:
-            if acc not in missing_dict:
-                missing_dict[acc] = {
-                    'account_number': acc,
-                    'address_1': '',  # overwritten from DB in review_missing_data
-                    'address_3': '',  # overwritten from DB in review_missing_data
-                    'needs_province': 'province' in missing,
-                    'needs_district': 'district' in missing,
-                    'needs_municipality': 'municipality' in missing,
-                    'needs_gender': gender_invalid,
-                    'needs_account_fix': row.get('_invalid_format') == True,
-                    # Store current values even if they aren't "missing" so UI can show them/POST them back
-                    'province': row.get('province') if not is_empty(row.get('province')) else '',
-                    'district': row.get('district') if not is_empty(row.get('district')) else '',
-                    'municipality': row.get('municipality') if not is_empty(row.get('municipality')) else '',
-                    'gender': row.get('gender') if _is_valid_gender(row.get('gender')) else '',
-                }
-            else:
-                for m in missing:
-                    missing_dict[acc][f'needs_{m}'] = True
-                if gender_invalid:
-                    missing_dict[acc]['needs_gender'] = True
-                if row.get('_invalid_format') == True:
-                    missing_dict[acc]['needs_account_fix'] = True
-                # Optional: update values if they were empty but now found (unlikely in this loop)
-                for f in ('province', 'district', 'municipality'):
-                    if not missing_dict[acc].get(f):
-                        val = row.get(f)
-                        if not is_empty(val): missing_dict[acc][f] = val
-                if not missing_dict[acc].get('gender') and _is_valid_gender(row.get('gender')):
-                    missing_dict[acc]['gender'] = row.get('gender')
+    # Normalize: work on a copy with string account numbers
+    acc_series = df[index_col].astype(str).str.strip()
+    valid_mask = acc_series.str.len() > 0
+
+    def _is_empty_series(s):
+        return s.isna() | s.astype(str).str.strip().str.lower().isin(['', 'null', 'nan', 'none'])
+
+    _mapper_cache = {'province': {}, 'district': {}, 'municipality': {}}
+
+    def _mapped_bad(series, col):
+        """Vectorized mapper check — returns boolean mask where mapped value is 'Unmatched'."""
+        if col == 'province':
+            return series.map(lambda v: map_province(v) == 'Unmatched' if not is_empty(v) else False)
+        if col == 'district':
+            return series.map(lambda v: map_district(v) == 'Unmatched' if not is_empty(v) else False)
+        if col == 'municipality':
+            return series.map(lambda v: map_local(v) == 'Unmatched' if not is_empty(v) else False)
+        return pd.Series(False, index=series.index)
+
+    # Build needs_* masks for each required column
+    needs = {}
+    for c in required_cols:
+        actual_col = find_col_by_norm(df, c)
+        if not actual_col:
+            needs[c] = pd.Series(True, index=df.index)
+            continue
+        s = df[actual_col].astype(str)
+        empty_mask = _is_empty_series(df[actual_col])
+        if c in ('province', 'district', 'municipality'):
+            bad_mask = ~empty_mask & _mapped_bad(df[actual_col], c)
+            needs[c] = empty_mask | bad_mask
+        else:
+            needs[c] = empty_mask
+
+    # Gender validity mask
+    gender_col = find_col_by_norm(df, 'gender')
+    if gender_col:
+        needs_gender = df[gender_col].apply(lambda v: not _is_valid_gender(v))
+    else:
+        needs_gender = pd.Series(True, index=df.index)
+
+    # Any required field missing → row needs review
+    any_missing = pd.concat([needs[c] for c in required_cols], axis=1).any(axis=1)
+    review_mask = valid_mask & any_missing
+
+    review_df = df[review_mask].copy()
+    review_df['_acc'] = acc_series[review_mask]
+
+    for _, row in review_df.iterrows():
+        acc = row['_acc']
+        if acc in missing_dict:
+            continue
+        missing = [c for c in required_cols if needs[c].loc[row.name]]
+        g_col = find_col_by_norm(review_df, 'gender')
+        missing_dict[acc] = {
+            'account_number': acc,
+            'address_1': '',
+            'address_3': '',
+            'needs_province':     'province' in missing,
+            'needs_district':     'district' in missing,
+            'needs_municipality': 'municipality' in missing,
+            'needs_gender':       bool(needs_gender.loc[row.name]) if g_col else False,
+            'province':     '' if is_empty(row.get('province'))     else str(row.get('province', '')),
+            'district':     '' if is_empty(row.get('district'))     else str(row.get('district', '')),
+            'municipality': '' if is_empty(row.get('municipality')) else str(row.get('municipality', '')),
+            'gender':       str(row.get(g_col, '')) if g_col and _is_valid_gender(row.get(g_col)) else '',
+        }
     return missing_dict
 
 # --- MAPPERS ---
@@ -551,6 +578,30 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
         if invalid_rows > 0:
             _set_progress(uid, 1, 'active', f'Identified {invalid_rows} rows ({invalid_acc_count} unique accounts) with invalid format.', extra={'log': f'Found {invalid_rows} invalid rows across {invalid_acc_count} merchants.'})
 
+        # Persist invalid-account audit log for the explanation download
+        try:
+            audit_path = os.path.join(settings.BASE_DIR, 'media', 'outputs', f'audit_{uid}.json')
+            invalid_accounts_audit = []
+            for acc in sorted(inv_accs):
+                acc_s = str(acc).strip()
+                if not acc_s or acc_s.lower() == 'nan':
+                    continue
+                if not acc_s.isdigit():
+                    reason = 'Not numeric (contains non-digit characters)'
+                elif len(acc_s) < 20:
+                    reason = f'Too short ({len(acc_s)} digits — expected 20)'
+                elif len(acc_s) > 20:
+                    reason = f'Too long ({len(acc_s)} digits — expected 20)'
+                else:
+                    reason = 'Failed account format validation'
+                invalid_accounts_audit.append({'account_number': acc_s, 'reason': reason, 'stage': 'Step 1 — Format check'})
+            with open(audit_path, 'w') as af:
+                json.dump({'invalid_accounts': invalid_accounts_audit,
+                           'invalid_total_rows': int(invalid_rows),
+                           'invalid_unique_accounts': int(invalid_acc_count)}, af)
+        except Exception as e:
+            print(f'[audit] failed to write invalid-account log: {e}')
+
     # Rebuild account sets after filtering — EXCLUDE invalid accounts
     if fonepay_acc_col:
         if '_invalid_format' in fonepay_df.columns:
@@ -580,23 +631,24 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
     np_prov_col = find_col_by_norm(nepalpay_df, 'province')
     np_dist_col = find_col_by_norm(nepalpay_df, 'district')
     
+    def _null_mask(df, col):
+        return df[col].isna() | (df[col].astype(str).str.strip().str.lower().isin(['', 'null', 'nan', 'none']))
+
     if fonepay_acc_col:
-        for _, row in fonepay_df.iterrows():
-            acc = str(row.get(fonepay_acc_col, '')).strip()
-            if not acc or is_empty(acc): continue
-            if fp_prov_col and is_empty(row.get(fp_prov_col)):
-                source_null_province.add(acc)
-            if fp_dist_col and is_empty(row.get(fp_dist_col)):
-                source_null_district.add(acc)
-    
+        accs = fonepay_df[fonepay_acc_col].astype(str).str.strip()
+        valid = accs.str.len() > 0
+        if fp_prov_col:
+            source_null_province.update(accs[valid & _null_mask(fonepay_df, fp_prov_col)].tolist())
+        if fp_dist_col:
+            source_null_district.update(accs[valid & _null_mask(fonepay_df, fp_dist_col)].tolist())
+
     if nepalpay_acc_col:
-        for _, row in nepalpay_df.iterrows():
-            acc = str(row.get(nepalpay_acc_col, '')).strip()
-            if not acc or is_empty(acc): continue
-            if np_prov_col and is_empty(row.get(np_prov_col)):
-                source_null_province.add(acc)
-            if np_dist_col and is_empty(row.get(np_dist_col)):
-                source_null_district.add(acc)
+        accs = nepalpay_df[nepalpay_acc_col].astype(str).str.strip()
+        valid = accs.str.len() > 0
+        if np_prov_col:
+            source_null_province.update(accs[valid & _null_mask(nepalpay_df, np_prov_col)].tolist())
+        if np_dist_col:
+            source_null_district.update(accs[valid & _null_mask(nepalpay_df, np_dist_col)].tolist())
 
     # Mark accounts from input file as confirmed merchants in CleanCBS
     _acc_list = [str(a) for a in all_accounts]
@@ -666,34 +718,42 @@ def perform_step1_and_2(file_or_path, unique_id, uid=None):
     fonepay_step2_df = fonepay_df.copy()
     nepalpay_step2_df = nepalpay_df.copy()
 
-    def safe_get_cbs(acc, col):
-        acc_str = str(acc).strip() if pd.notna(acc) else ""
-        if not cbs_lookup.empty and acc_str in cbs_lookup.index:
-            val = cbs_lookup.loc[acc_str, col]
-            return val.iloc[0] if isinstance(val, pd.Series) else val
-        return None
+    def _enrich_df(df, acc_col, cbs_df):
+        """Vectorized CBS enrichment — replaces 7 row-by-row apply() calls."""
+        if df.empty or cbs_df.empty or not acc_col:
+            return df
+        result = df.copy()
+        # Build account → cbs field series (vectorized map)
+        cbs_reset = cbs_df.reset_index() if hasattr(cbs_df, 'index') and cbs_df.index.name == 'account_number' else cbs_df
+        acc_series = result[acc_col].astype(str).str.strip()
+        # (output_col, cbs_col, df_norm_name)
+        fill_spec = [
+            ('province',     'province',     'province'),
+            ('district',     'district',     'district'),
+            ('municipality', 'municipality', 'municipality'),
+            ('gender',       'gender',       'gender'),
+            ('age',          'age',          'age'),
+            ('address_1',    'address_1',    'address1'),
+            ('address_3',    'address_3',    'address3'),
+        ]
+        for out_col, cbs_col, norm_name in fill_spec:
+            if cbs_col not in cbs_reset.columns:
+                continue
+            cbs_map = cbs_reset.set_index('account_number')[cbs_col]
+            cbs_vals = acc_series.map(cbs_map)
+            # Find existing column in df by normalized name
+            existing = find_col_by_norm(result, norm_name) or (out_col if out_col in result.columns else None)
+            if existing and existing in result.columns:
+                empty_mask = result[existing].isna() | result[existing].astype(str).str.strip().str.lower().isin(['', 'null', 'nan', 'none'])
+                result[out_col] = result[existing].where(~empty_mask, cbs_vals)
+            else:
+                result[out_col] = cbs_vals
+        return result
 
-    if fonepay_acc_col:
-        fill_fp = get_fill_col(fonepay_acc_col, cbs_lookup)
-        fonepay_step2_df['province'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'province'), axis=1)
-        fonepay_step2_df['district'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'district'), axis=1)
-        fonepay_step2_df['municipality'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'municipality'), axis=1)
-        
-        fonepay_step2_df['gender'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'gender'), axis=1)
-        fonepay_step2_df['age'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'age'), axis=1)
-        fonepay_step2_df['address_1'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address1', cbs_col='address_1'), axis=1)
-        fonepay_step2_df['address_3'] = fonepay_step2_df.apply(lambda r: fill_fp(r, 'address3', cbs_col='address_3'), axis=1)
-
-    if nepalpay_acc_col:
-        fill_np = get_fill_col(nepalpay_acc_col, cbs_lookup)
-        nepalpay_step2_df['province'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'province'), axis=1)
-        nepalpay_step2_df['district'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'district'), axis=1)
-        
-        nepalpay_step2_df['municipality'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'municipality'), axis=1)
-        nepalpay_step2_df['gender'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'gender'), axis=1)
-        nepalpay_step2_df['age'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'age'), axis=1)
-        nepalpay_step2_df['address_1'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address1', cbs_col='address_1'), axis=1)
-        nepalpay_step2_df['address_3'] = nepalpay_step2_df.apply(lambda r: fill_np(r, 'address3', cbs_col='address_3'), axis=1)
+    if fonepay_acc_col and not cbs_lookup.empty:
+        fonepay_step2_df = _enrich_df(fonepay_step2_df, fonepay_acc_col, cbs_lookup)
+    if nepalpay_acc_col and not cbs_lookup.empty:
+        nepalpay_step2_df = _enrich_df(nepalpay_step2_df, nepalpay_acc_col, cbs_lookup)
 
     # Propagate _invalid_format to step2 so check_missing_records can see it
     if '_invalid_format' in fonepay_df.columns:
@@ -885,19 +945,31 @@ def _generate_final_report(unique_id):
         step2_lookup = {}
         for _s2 in [f_step2, n_step2]:
             _s2_acc = find_account_col(_s2)
-            if _s2_acc and not _s2.empty:
-                for _, _row in _s2.iterrows():
-                    _a = str(_row.get(_s2_acc, '')).strip()
-                    if _a and _a not in step2_lookup:
-                        _prov = _row.get('province') or _row.get('Province') or ''
-                        _dist = _row.get('district') or _row.get('District') or ''
-                        _muni = _row.get('municipality') or _row.get('Municipality') or ''
-                        _gend = _row.get('gender') or _row.get('Gender') or ''
-                        if str(_prov).strip() and str(_prov).strip().lower() not in ('nan', 'null', ''):
-                            step2_lookup[_a] = {
-                                'province': str(_prov).strip(), 'district': str(_dist).strip(),
-                                'municipality': str(_muni).strip(), 'gender': str(_gend).strip(),
-                            }
+            if not _s2_acc or _s2.empty:
+                continue
+            _prov_col = find_col_by_norm(_s2, 'province')
+            _dist_col = find_col_by_norm(_s2, 'district')
+            _muni_col = find_col_by_norm(_s2, 'municipality')
+            _gend_col = find_col_by_norm(_s2, 'gender')
+            if not _prov_col:
+                continue
+            # Vectorized: keep rows with non-empty province
+            _accs = _s2[_s2_acc].astype(str).str.strip()
+            _provs = _s2[_prov_col].astype(str).str.strip()
+            _mask = (_accs.str.len() > 0) & (~_provs.str.lower().isin(['', 'nan', 'null', 'none']))
+            _filtered = _s2[_mask]
+            for _a, _prov, _dist, _muni, _gend in zip(
+                _filtered[_s2_acc].astype(str).str.strip(),
+                _filtered[_prov_col].astype(str).str.strip() if _prov_col else [''] * len(_filtered),
+                _filtered[_dist_col].astype(str).str.strip() if _dist_col else [''] * len(_filtered),
+                _filtered[_muni_col].astype(str).str.strip() if _muni_col else [''] * len(_filtered),
+                _filtered[_gend_col].astype(str).str.strip() if _gend_col else [''] * len(_filtered),
+            ):
+                if _a not in step2_lookup:
+                    step2_lookup[_a] = {
+                        'province': _prov, 'district': _dist,
+                        'municipality': _muni, 'gender': _gend,
+                    }
 
         merged_pay = []
         for acc in add_accs:
@@ -1835,10 +1907,7 @@ def _run_pipeline(file_path, uid):
 
         has_missing = bool(fp_missing or np_missing)
         
-        # Breakdown missing for'precise' logging
-        invalid_fmt = sum(1 for d in fp_missing.values() if d.get('needs_account_fix')) + \
-                      sum(1 for d in np_missing.values() if d.get('needs_account_fix'))
-        cbs_missing = len(fp_missing) + len(np_missing) - invalid_fmt
+        cbs_missing = len(fp_missing) + len(np_missing)
 
         result_info = {
             'unique_id': uid,
@@ -1850,12 +1919,8 @@ def _run_pipeline(file_path, uid):
         _set_progress(uid, 5, 'active', 'Scanning records for geographical patterns...', extra={'log': 'Analyzing address fields against 753 Local Level names via deterministic scripts.'})
 
         if has_missing:
-            log_parts = []
-            if invalid_fmt > 0: log_parts.append(f"{invalid_fmt} Invalid Accounts")
-            if cbs_missing > 0: log_parts.append(f"{cbs_missing} missing in CBS")
-            log_desc = " & ".join(log_parts) if log_parts else "record issues"
-            
-            _set_progress(uid, 5, 'action_required', f'Found {log_desc}', extra={**result_info, 'log': f'Manual Review required: {invalid_fmt} with bad formats and {cbs_missing} records not found in CBS.'})
+            log_desc = f"{cbs_missing} records missing CBS data" if cbs_missing > 0 else "record issues"
+            _set_progress(uid, 5, 'action_required', f'Found {log_desc}', extra={**result_info, 'log': f'Manual Review required: {cbs_missing} records not found in CBS.'})
             return
 
         # Merchant data clean → now process MB + Connect IPS for sheet 11
@@ -2319,6 +2384,7 @@ def api_classify_municipality(request):
             })
 
     # ---- Layer 2: AI classification — district and municipality ONLY ----
+    ai_unavailable = False
     if still_need_ai:
         SYSTEM_PROMPT = (
             "You classify Nepali bank addresses into district and municipality type.\n"
@@ -2463,12 +2529,13 @@ def api_classify_municipality(request):
                     if 'municipality' in requested and muni_mapped != 'Unmatched' and not resolved[acc].get('municipality'):
                         resolved[acc]['municipality'] = muni_mapped
 
-            if uid := request.GET.get('uid'):
-                # JS already updates local status, but we could log here if needed
-                pass
-
         except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
+            # Log full detail to backend, show generic message to user.
+            # Do NOT abort — preserve CBS / address-classification results.
+            import traceback
+            print(f'[AI-Classify] AI unavailable: {e}')
+            traceback.print_exc()
+            ai_unavailable = True
 
     # ---- Layer 3: Derive province from district (never AI) ----
     for acc, entry in resolved.items():
@@ -2529,7 +2596,11 @@ def api_classify_municipality(request):
             obj.save()
             print(f"[AI-Save] SUCCESSFULLY PERSISTED {acc} to CleanCBS")
 
-    return JsonResponse({'results': resolved})
+    response_data = {'results': resolved}
+    if ai_unavailable:
+        response_data['ai_unavailable'] = True
+        response_data['ai_message'] = 'AI assist is not available right now.'
+    return JsonResponse(response_data)
 
 
 def _prepare_manual_review_data(unique_id):
@@ -2869,7 +2940,8 @@ def apply_manual_mapping(request, unique_id):
 
 @login_required_custom
 def finalize_report(request, unique_id):
-    """Renders the full results page. Generates report if not already created."""
+    """Redirect to dashboard resume mode — keeps results in the overlay UI."""
+    return redirect(f'/dashboard/?resume={unique_id}&done=5')
     meta = _load_meta(unique_id)
     month_name = meta.get('month', '')
     year_val   = meta.get('year', '')
@@ -3285,3 +3357,114 @@ def analytics_api(request):
 
     # Payment data saved — return to dashboard modal to generate final report (step 8)
     return redirect(f'/dashboard/?resume={unique_id}&done=7')
+
+
+# ── AUDIT / EXPLANATION FILE DOWNLOAD ───────────────────────────────────────
+
+@login_required_custom
+def download_explanation(request, pk):
+    """Generate an Excel audit file explaining what happened to each account
+    during the pipeline: invalid drops, CBS hits, manual review, etc."""
+    try:
+        batch = ReportBatch.objects.get(pk=pk)
+    except ReportBatch.DoesNotExist:
+        raise Http404
+    if not batch.unique_id:
+        raise Http404('Audit not available for this batch (no pipeline ID).')
+
+    uid = batch.unique_id
+    output_dir = os.path.join(settings.BASE_DIR, 'media', 'outputs')
+
+    # Read persisted audit log
+    audit_path = os.path.join(output_dir, f'audit_{uid}.json')
+    audit = {}
+    if os.path.exists(audit_path):
+        try:
+            with open(audit_path, 'r') as f:
+                audit = json.load(f)
+        except Exception:
+            audit = {}
+
+    # Read enrichment stats
+    stats_path = os.path.join(output_dir, f'stats_{uid}.json')
+    stats = {}
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, 'r') as f:
+                stats = json.load(f)
+        except Exception:
+            stats = {}
+
+    # Build summary rows
+    summary_rows = [
+        ('Report Period',          f'{batch.month} {batch.year}'),
+        ('Generated By',           batch.generated_by_name or batch.generated_by),
+        ('Generated At',           batch.created_at.strftime('%Y-%m-%d %H:%M:%S') if batch.created_at else ''),
+        ('Status',                 batch.get_status_display()),
+        ('', ''),
+        ('Total Records Processed',   batch.total_records),
+        ('FonePay Merchants',         batch.fonepay_count),
+        ('NepalPay Merchants',        batch.nepalpay_count),
+        ('Merged from CBS',           batch.merged_cbs_count),
+        ('Invalid Account Format',    batch.invalid_account_count),
+        ('', ''),
+        ('Unique Invalid Accounts',   audit.get('invalid_unique_accounts', 0)),
+        ('Invalid Rows (incl. dups)', audit.get('invalid_total_rows', 0)),
+    ]
+    summary_df = pd.DataFrame(summary_rows, columns=['Metric', 'Value'])
+
+    # Invalid accounts sheet
+    invalid_df = pd.DataFrame(audit.get('invalid_accounts', []),
+                              columns=['account_number', 'reason', 'stage'])
+    if not invalid_df.empty:
+        invalid_df.columns = ['Account Number', 'Reason for Discard', 'Pipeline Stage']
+
+    # Enrichment stats sheet (per field)
+    enrich_rows = []
+    for field, info in (stats.items() if isinstance(stats, dict) else []):
+        if isinstance(info, dict) and {'missing_before', 'missing_after', 'filled'} <= info.keys():
+            enrich_rows.append({
+                'Field': field.title(),
+                'Missing Before': info['missing_before'],
+                'Missing After Enrichment': info['missing_after'],
+                'Filled by CBS / CleanCBS': info['filled'],
+            })
+    enrich_df = pd.DataFrame(enrich_rows)
+
+    # Notes sheet
+    notes = pd.DataFrame([
+        ['Invalid Account Format',
+         'Account numbers must be exactly 20 numeric digits. Rows with non-numeric '
+         'characters, wrong length, or null/blank values are dropped before any '
+         'further processing and are listed in the "Invalid Accounts" sheet.'],
+        ['Manual Review',
+         'Records whose province / district / municipality could not be filled '
+         'from CBS or address-based classification are surfaced for manual entry. '
+         'AI is used only as a fallback for district / municipality.'],
+        ['CleanCBS',
+         'A platform-owned mirror of confirmed merchant CBS data. Manual review '
+         'fills and address-based classifications are persisted here. '
+         'The bank\'s CBSMerchant table is read-only.'],
+        ['Data Sources Priority',
+         '1) Original input file value, 2) CleanCBS correction, 3) CBS lookup, '
+         '4) Address-keyword classification, 5) AI suggestion (if available).'],
+    ], columns=['Topic', 'Explanation'])
+
+    # Write Excel
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        summary_df.to_excel(writer, sheet_name='Summary', index=False)
+        if not invalid_df.empty:
+            invalid_df.to_excel(writer, sheet_name='Invalid Accounts', index=False)
+        if not enrich_df.empty:
+            enrich_df.to_excel(writer, sheet_name='Enrichment Stats', index=False)
+        notes.to_excel(writer, sheet_name='Notes', index=False)
+    buffer.seek(0)
+
+    filename = f'audit_{batch.month}_{batch.year}_{uid}.xlsx'
+    response = HttpResponse(
+        buffer.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response

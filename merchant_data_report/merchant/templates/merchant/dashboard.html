@@ -204,11 +204,23 @@
   </header>
 
   {% if messages %}
+  <script type="application/json" id="flash-messages">
+  [
+    {% for msg in messages %}
+      {"text": "{{ msg|escapejs }}", "tag": "{{ msg.tags|default:'info' }}"}{% if not forloop.last %},{% endif %}
+    {% endfor %}
+  ]
+  </script>
   <script>
     document.addEventListener('DOMContentLoaded', function () {
-      {% for msg in messages %}
-        showToast("{{ msg|escapejs }}", "{% if msg.tags == 'error' %}error{% elif msg.tags == 'warning' %}warning{% elif msg.tags == 'success' %}success{% else %}info{% endif %}");
-      {% endfor %}
+      var el = document.getElementById('flash-messages');
+      if (!el) return;
+      try {
+        JSON.parse(el.textContent).forEach(function (m) {
+          var type = m.tag === 'error' || m.tag === 'warning' || m.tag === 'success' ? m.tag : 'info';
+          showToast(m.text, type);
+        });
+      } catch (e) {}
     });
   </script>
   {% endif %}
@@ -400,7 +412,7 @@
           {% if batch.status == 'processing' and batch.unique_id %}
           <div style="padding:8px 10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:.72rem;color:#92400e">
             <strong>In progress.</strong>
-            <a href="{% url 'finalize_report' batch.unique_id %}" style="color:#92400e;text-decoration:underline">Resume</a>
+            <a href="/dashboard/?resume={{ batch.unique_id }}&done=5" style="color:#92400e;text-decoration:underline">Resume</a>
           </div>
           {% endif %}
 
@@ -412,22 +424,31 @@
           {% endif %}
 
           <div class="log-card-actions">
-            {% if batch.status == 'completed' and batch.final_report_filename %}
-            <a href="{% url 'download_final' batch.pk %}" class="btn-dl btn-bfi btn-sm">&darr; Final Report</a>
-            {% endif %}
+            <div class="user-action">
+              {% if batch.unique_id %}
+              <a href="{% url 'download_explanation' batch.pk %}" class="btn-dl btn-sm" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d" title="Audit log: invalid drops, CBS hits, enrichment stats">&darr; Audit Log</a>
+              {% endif %}
+              
 
-            {% if batch.status == 'completed' and not batch.has_errors %}
-            <form method="post" action="{% url 'toggle_verified' batch.pk %}" style="display:inline;margin-left:auto">
-              {% csrf_token %}
-              <input type="hidden" name="next" value="{% url 'dashboard' %}">
-              <label class="verify-label {% if batch.verified %}verified{% endif %}"
-                     title="{% if batch.verified %}Verified — visible in Passed Reports. Click to unverify.{% else %}Mark as error-free to publish to Passed Reports{% endif %}">
-                <input type="checkbox" {% if batch.verified %}checked{% endif %} onchange="this.form.submit()">
-                <span class="verify-check-icon">{% if batch.verified %}&check;{% else %}&#9675;{% endif %}</span>
-                <span>Error-free</span>
-              </label>
-            </form>
-            {% endif %}
+              {% if batch.status == 'completed' and not batch.has_errors %}
+              <form method="post" action="{% url 'toggle_verified' batch.pk %}" style="display:inline;margin-left:auto">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{% url 'dashboard' %}">
+                <label class="verify-label {% if batch.verified %}verified{% endif %}"
+                      title="{% if batch.verified %}Verified — visible in Passed Reports. Click to unverify.{% else %}Mark as error-free to publish to Passed Reports{% endif %}">
+                  <input type="checkbox" {% if batch.verified %}checked{% endif %} onchange="this.form.submit()">
+                  <span class="verify-check-icon">{% if batch.verified %}&check;{% else %}&#9675;{% endif %}</span>
+                  <span>Error-free</span>
+                </label>
+              </form>
+              {% endif %}
+            </div>
+            <div class="final-feild">
+              {% if batch.status == 'completed' and batch.final_report_filename %}
+              <a href="{% url 'download_final' batch.pk %}" class="btn-dl btn-bfi btn-sm">&darr; Final Report</a>
+              {% endif %}
+              
+            </div>
           </div>
         </div>
         {% endfor %}

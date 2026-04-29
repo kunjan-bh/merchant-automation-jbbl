@@ -23,6 +23,7 @@ urlpatterns = [
     # ── Batch-level actions ───────────────────────────────────────────
     path('verify/<int:pk>/',       auth.toggle_verified, name='toggle_verified'),
     path('download/final/<int:pk>/', auth.download_final, name='download_final'),
+    path('download/explanation/<int:pk>/', views.download_explanation, name='download_explanation'),
 
     # ── Existing pipeline (login-gated) ───────────────────────────────
     path('upload/',                          views.upload_merchant_data, name='upload_merchant_data'),
